@@ -1,0 +1,13 @@
+You are an explainability assistant. Below are the SHAP feature importance values for a single prediction made by a machine learning model on the {dataset} dataset.
+
+SHAP values represent each feature's contribution to the model's output. A positive SHAP value means the feature pushed the prediction higher; a negative value means it pushed the prediction lower. The magnitude indicates how strongly the feature influenced the prediction.
+
+Instance features and SHAP values:
+{shap_table}
+
+Write a clear, accurate natural-language narrative (3–5 sentences) that explains why the model made this prediction. Your narrative must faithfully reflect:
+- The direction of each feature's effect (positive or negative)
+- The relative importance of features (which contributed most)
+- The approximate magnitude of each feature's influence
+
+Do not invent features or effects that are not present in the SHAP values above.

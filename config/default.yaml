@@ -1,0 +1,58 @@
+run:
+  name: "pilot_run"
+  seed: 42
+
+datasets:
+  - name: "adult"
+    path: "data/processed/adult.csv"
+    shap_col_prefix: "shap_"
+    n_instances: 100
+  - name: "german_credit"
+    path: "data/processed/german_credit.csv"
+    shap_col_prefix: "shap_"
+    n_instances: 100
+
+models:
+  - id: "claude-opus"
+    provider: "anthropic"
+    model_name: "claude-opus-4-6"
+    max_tokens: 512
+    temperature: 0.0
+  - id: "llama3-70b"
+    provider: "together"
+    model_name: "meta-llama/Llama-3-70b-chat-hf"
+    max_tokens: 512
+    temperature: 0.0
+  - id: "mistral-7b"
+    provider: "mistral"
+    model_name: "mistral-small-latest"
+    max_tokens: 512
+    temperature: 0.0
+  # Local model (uncomment when local deployment is set up)
+  # - id: "llama3-local"
+  #   provider: "ollama"
+  #   model_name: "llama3:70b"
+  #   base_url: "http://localhost:11434"
+
+prompts:
+  strategies:
+    - zero_shot
+    - few_shot
+    - chain_of_thought
+  template_dir: "config/prompts/"
+
+evaluation:
+  top_k_features: 3
+  magnitude_threshold: 0.5
+  use_llm_judge: false
+  llm_judge_model: "claude-opus-4-6"
+
+storage:
+  db_path: "outputs/results.db"
+  export_dir: "outputs/evaluations/"
+  narrative_dir: "outputs/narratives/"
+
+visualisation:
+  figure_dir: "outputs/figures/"
+  format: "png"
+  dpi: 150
