@@ -57,10 +57,12 @@ xai-hallucination/
 │       ├── heatmaps.py               # Model × prompt strategy heatmaps
 │       └── export.py                 # Save all figures for a run to disk
 ├── notebooks/
+│   ├── 00_data_preparation.ipynb     # Interactive version of prepare_data.py
 │   ├── 01_data_exploration.ipynb     # Explore SHAP distributions, feature importance
 │   ├── 02_narrative_inspection.ipynb # Browse generated narratives against SHAP values
 │   └── 03_results_visualisation.ipynb# Load evaluations and produce all figures
 ├── scripts/
+│   ├── prepare_data.py               # Download OpenXAI data + compute SHAP values
 │   ├── run_generation.py             # CLI: generate narratives
 │   ├── run_evaluation.py             # CLI: evaluate a completed run
 │   └── export_results.py             # CLI: export DB → CSV (+ optional figures)
@@ -163,6 +165,65 @@ To add a local Ollama model, uncomment and configure the entry in `models:`:
 
 ---
 
+## Data preparation
+
+Before running the generation pipeline, the processed CSVs must exist in `data/processed/`.
+The `prepare_data.py` script handles this end-to-end using the OpenXAI benchmark library.
+
+### Install OpenXAI
+
+OpenXAI is not on PyPI. Install it from source once:
+
+```bash
+git clone https://github.com/AI4LIFE-GROUP/OpenXAI.git
+cd OpenXAI && pip install -e .
+cd ..   # return to project root
+```
+
+### Run data preparation
+
+```bash
+# Prepare both datasets (Adult Income + German Credit) — recommended default
+python scripts/prepare_data.py
+
+# One dataset only
+python scripts/prepare_data.py --dataset adult
+python scripts/prepare_data.py --dataset german_credit
+
+# Choose the underlying ML model (default: lr = logistic regression)
+python scripts/prepare_data.py --model ann
+
+# Cap instances for a quick smoke-test
+python scripts/prepare_data.py --n 20 --validate
+
+# Use the training split instead of the test split
+python scripts/prepare_data.py --split train
+```
+
+The script:
+1. Downloads the OpenXAI dataset (cached to `data/raw/` on first run).
+2. Loads the corresponding pretrained model (`lr` or `ann`) from OpenXAI.
+3. Runs the OpenXAI SHAP explainer (`SHAPExplainerC`) over each instance, using the training set as the SHAP background distribution.
+4. Saves a CSV to `data/processed/` with feature columns and matching `shap_<feature>` columns.
+
+With `--validate`, it prints a summary showing row count, label distribution, SHAP value range, and a feature/SHAP column parity check.
+
+An interactive version of the same steps is available in `notebooks/00_data_preparation.ipynb`.
+
+### Output format
+
+Each processed CSV has this layout:
+
+| Column type | Example columns |
+|---|---|
+| Feature values | `age`, `education_num`, `hours_per_week`, ... |
+| Ground-truth label | `label` |
+| SHAP values | `shap_age`, `shap_education_num`, `shap_hours_per_week`, ... |
+
+The `shap_` prefix must match `shap_col_prefix` in `config/default.yaml` (default: `shap_`).
+
+---
+
 ## Running the pipeline
 
 ### Step 1 — Generate narratives
@@ -228,7 +289,8 @@ cfg = load_config("config/custom.yaml")      # custom path
 
 model = cfg.get_model("claude-opus")         # ModelConfig
 dataset = cfg.get_dataset("adult")           # DatasetConfig
-template = cfg.load_prompt_template("zero_shot")  # raw string
+template = cfg.load_prompt_template("zero_shot")       # raw string
+path    = cfg.prompt_template_path("zero_shot")        # Path object (without reading)
 ```
 
 ---
@@ -240,7 +302,10 @@ Loads a processed CSV, validates that SHAP columns exist, and returns the first
 ready for injection into prompt templates.
 
 ```python
-from src.data_loader import load_dataset, format_shap_table, top_k_shap_features
+from src.data_loader import (
+    load_dataset, format_shap_table, top_k_shap_features,
+    get_shap_columns, get_feature_columns,
+)
 
 df = load_dataset(cfg.get_dataset("adult"))
 row = df.iloc[0]
@@ -255,6 +320,10 @@ print(format_shap_table(row, prefix="shap_"))
 # Top-3 features by |SHAP|
 top3 = top_k_shap_features(row, prefix="shap_", k=3)
 # [("age", 0.42), ("education_num", 0.31), ("hours_per_week", 0.18)]
+
+# Column helpers (operate on the full DataFrame, not a single row)
+shap_cols = get_shap_columns(df, prefix="shap_")   # ["shap_age", "shap_education_num", ...]
+feat_cols  = get_feature_columns(df, prefix="shap_") # ["age", "education_num", ...]
 ```
 
 ---
@@ -265,15 +334,34 @@ Creates and manages the three-table SQLite schema. Uses WAL mode and foreign key
 All write functions are atomic (autocommit per call).
 
 ```python
-from src.db import init_db, db_connection, insert_run, insert_narrative, get_narratives_for_run
+from src.db import (
+    init_db, db_connection, open_connection,
+    insert_run, insert_narrative, insert_evaluation,
+    get_run, get_narrative, get_narratives_for_run,
+    get_evaluations_for_run, list_runs,
+)
 
 init_db("outputs/results.db")               # creates schema (idempotent)
 
 with db_connection("outputs/results.db") as conn:
     insert_run(conn, run_id="abc123", run_name="pilot", config_json={...}, created_at="...")
     insert_narrative(conn, narrative_id="n1", run_id="abc123", ...)
-    rows = get_narratives_for_run(conn, "abc123")
+    insert_evaluation(conn, eval_id="e1", narrative_id="n1",
+                      sign_inversion=False, rank_swap=True, ..., evaluated_at="...")
+
+    rows      = get_narratives_for_run(conn, "abc123")   # List[dict]
+    evals     = get_evaluations_for_run(conn, "abc123")  # List[dict], joined with narrative cols
+    run_meta  = get_run(conn, "abc123")                  # dict | None
+    one_narr  = get_narrative(conn, "n1")                # dict | None
+    all_runs  = list_runs(conn)                          # List[dict], most recent first
 ```
+
+`open_connection()` is the non-context-manager alternative that returns a bare
+`sqlite3.Connection` when you need manual lifetime control.
+
+`get_evaluations_for_run` returns rows joined with `narratives`, so each dict
+includes `dataset`, `instance_id`, `model_id`, and `prompt_strategy` alongside
+the evaluation flags — useful for loading directly into a DataFrame.
 
 **Schema:**
 
@@ -287,28 +375,31 @@ CREATE TABLE runs (
 
 CREATE TABLE narratives (
     narrative_id    TEXT PRIMARY KEY,
-    run_id          TEXT REFERENCES runs(run_id),
-    dataset         TEXT,
-    instance_id     INTEGER,
-    model_id        TEXT,
-    prompt_strategy TEXT,
-    narrative_text  TEXT,
-    created_at      TEXT
+    run_id          TEXT NOT NULL REFERENCES runs(run_id),
+    dataset         TEXT NOT NULL,
+    instance_id     INTEGER NOT NULL,
+    model_id        TEXT NOT NULL,
+    prompt_strategy TEXT NOT NULL,
+    narrative_text  TEXT NOT NULL,
+    created_at      TEXT NOT NULL
 );
 
 CREATE TABLE evaluations (
     eval_id              TEXT PRIMARY KEY,
-    narrative_id         TEXT REFERENCES narratives(narrative_id),
-    sign_inversion       INTEGER,    -- 0 or 1
-    rank_swap            INTEGER,
-    feature_fabrication  INTEGER,
-    magnitude_distortion INTEGER,
-    omission             INTEGER,
-    any_hallucination    INTEGER,    -- 1 if any of the above is 1
+    narrative_id         TEXT NOT NULL REFERENCES narratives(narrative_id),
+    sign_inversion       INTEGER NOT NULL DEFAULT 0,
+    rank_swap            INTEGER NOT NULL DEFAULT 0,
+    feature_fabrication  INTEGER NOT NULL DEFAULT 0,
+    magnitude_distortion INTEGER NOT NULL DEFAULT 0,
+    omission             INTEGER NOT NULL DEFAULT 0,
+    any_hallucination    INTEGER NOT NULL DEFAULT 0,  -- 1 if any of the above is 1
     notes                TEXT,
-    evaluated_at         TEXT
+    evaluated_at         TEXT NOT NULL
 );
 ```
+
+Four indexes are created automatically: `narratives(run_id)`, `narratives(model_id)`,
+`narratives(dataset)`, and `evaluations(narrative_id)`.
 
 ---
 
@@ -344,7 +435,13 @@ calls the LLM client, and persists each result to both the DB and a JSONL file.
 ```python
 from src.narrative_generator import run_generation
 
-run_id = run_generation(cfg, dry_run=False, filter_model="claude-opus", n_override=5)
+run_id = run_generation(
+    cfg,
+    dry_run=False,
+    filter_model="claude-opus",   # optional: restrict to one model id
+    filter_dataset="adult",       # optional: restrict to one dataset name
+    n_override=5,                 # optional: override n_instances for all datasets
+)
 ```
 
 A progress bar (via `tqdm`) tracks generation. Errors on individual instances are
@@ -359,7 +456,7 @@ ground-truth SHAP values. Returns an `EvaluationResult` with per-type boolean
 flags and a human-readable `notes` list explaining each flag.
 
 ```python
-from src.evaluator import evaluate_narrative, EvaluationResult
+from src.evaluator import evaluate_narrative, llm_judge, EvaluationResult
 from src.config import EvaluationConfig
 
 shap_values = {"age": 0.42, "education_num": 0.31, "hours_per_week": 0.18, "capital_gain": -0.05}
@@ -369,11 +466,17 @@ result = evaluate_narrative(
     narrative="Age was the most important factor, increasing the predicted income.",
     shap_values=shap_values,
     cfg=cfg_eval,
+    all_dataset_features=["age", "education_num", "hours_per_week", "capital_gain", "sex"],
+    # ^ optional: full feature list of the dataset. When provided, fabrication is only
+    #   flagged for feature-like tokens that do not exist in the dataset at all.
+    #   When omitted, any token not in the per-instance shap_values dict is flagged
+    #   (higher false-positive rate for zero-contribution features).
 )
 
 print(result.any_hallucination)   # True/False
 print(result.sign_inversion)      # True/False
 print(result.notes_str())         # "rank_swap: ..."
+print(result.to_dict())           # {"sign_inversion": 0, "rank_swap": 1, ..., "notes": "..."}
 ```
 
 When `use_llm_judge: true` is set in config (or `--llm-judge` is passed to the
@@ -381,6 +484,15 @@ script), a second LLM pass is run on each narrative. The judge is given the SHAP
 values and asked to assess all five hallucination types in a structured format.
 Its verdicts are merged with the rule-based results — a narrative is flagged if
 either pass raises an alarm.
+
+```python
+# Call the LLM judge directly (e.g. for spot-checking a single narrative)
+judge_result = llm_judge(
+    narrative="Age was the most important factor...",
+    shap_values=shap_values,
+    model_cfg=cfg.get_model("claude-opus"),
+)
+```
 
 ---
 
