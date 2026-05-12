@@ -134,7 +134,7 @@ class TestMistral:
         mock_client = MagicMock()
         mock_client.chat.complete.return_value = mock_response
 
-        with patch("mistralai.Mistral", return_value=mock_client):
+        with patch("mistralai.client.Mistral", return_value=mock_client):
             client = LLMClient()
             result = client.generate("Test prompt", _model_cfg("mistral"))
 
@@ -151,7 +151,7 @@ class TestMistral:
 
         model_cfg = _model_cfg("mistral", "mistral-small-latest")
 
-        with patch("mistralai.Mistral", return_value=mock_client):
+        with patch("mistralai.client.Mistral", return_value=mock_client):
             client = LLMClient()
             client.generate("Hello", model_cfg)
 

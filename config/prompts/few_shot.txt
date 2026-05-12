@@ -25,8 +25,8 @@ Narrative:
 The model predicted a high credit risk primarily due to the large credit amount (8500), which had the strongest negative effect. The long loan duration (36 months) further increased predicted risk. Having no checking account had a moderate positive effect, partially offsetting the risk factors. The applicant's young age contributed a small positive effect.
 
 --- YOUR TASK ---
-Dataset: {dataset}
+Dataset: {{ dataset }}
 SHAP values:
-{shap_table}
+{{ shap_table }}
 
 Write a clear, accurate natural-language narrative (3–5 sentences) following the same pattern as the examples above. Faithfully reflect direction, relative importance, and approximate magnitude. Do not fabricate features or effects.

@@ -45,7 +45,7 @@ evaluation:
   top_k_features: 3
   magnitude_threshold: 0.5
   use_llm_judge: false
-  llm_judge_model: "claude-opus-4-6"
+  llm_judge_model: "claude-opus"     # model id (must match one of models[].id above)
 
 storage:
   db_path: "outputs/results.db"

@@ -128,19 +128,24 @@ def _feature_in_text(feature_name: str, text: str) -> bool:
     return any(v in norm for v in _feature_variants(feature_name))
 
 
-def _context_window(feature_name: str, text: str, window: int = 120) -> str:
+def _sentence_context(feature_name: str, text: str) -> str:
     """
-    Return a substring of *text* around the first occurrence of *feature_name*.
-    Falls back to the full text if the feature is not found.
+    Return the sentence(s) from *text* that contain *feature_name*.
+
+    Scoping direction and magnitude checks to the containing sentence prevents
+    the context window from bleeding into adjacent sentences and picking up
+    direction/magnitude words that belong to a different feature's description.
+
+    Falls back to the full normalised text if no matching sentence is found.
     """
     norm = _normalise(text)
-    for variant in _feature_variants(feature_name):
-        idx = norm.find(variant)
-        if idx != -1:
-            start = max(0, idx - window)
-            end = min(len(norm), idx + len(variant) + window)
-            return norm[start:end]
-    return norm
+    # Split on sentence-ending punctuation followed by whitespace
+    sentences = re.split(r"(?<=[.!?])\s+", norm.strip())
+    matches = [
+        s for s in sentences
+        if any(v in s for v in _feature_variants(feature_name))
+    ]
+    return " ".join(matches) if matches else norm
 
 
 def _contains_any(words: List[str], text: str) -> bool:
@@ -173,7 +178,7 @@ def _check_sign_inversion(
         if not _feature_in_text(feature, narrative):
             continue  # Feature not mentioned — omission check handles this
 
-        context = _context_window(feature, narrative)
+        context = _sentence_context(feature, narrative)
         has_positive = _contains_any(_POSITIVE_DIRECTION_WORDS, context)
         has_negative = _contains_any(_NEGATIVE_DIRECTION_WORDS, context)
 
@@ -329,7 +334,7 @@ def _check_magnitude_distortion(
             continue
 
         relative = abs(shap_val) / max_abs
-        context = _context_window(feature, narrative)
+        context = _sentence_context(feature, narrative)
 
         is_large = relative > magnitude_threshold
         is_small = relative <= magnitude_threshold

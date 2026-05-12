@@ -262,3 +262,29 @@ def list_runs(conn: sqlite3.Connection) -> List[dict]:
         "SELECT run_id, run_name, created_at FROM runs ORDER BY created_at DESC"
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+def narrative_exists(
+    conn: sqlite3.Connection,
+    run_id: str,
+    dataset: str,
+    instance_id: int,
+    model_id: str,
+    prompt_strategy: str,
+) -> bool:
+    """
+    Return True if a narrative already exists for this exact combination.
+
+    Used by the generator to skip work that was already completed in a
+    previous (possibly interrupted) run, enabling crash-safe resume.
+    """
+    row = conn.execute(
+        """
+        SELECT 1 FROM narratives
+        WHERE run_id = ? AND dataset = ? AND instance_id = ?
+          AND model_id = ? AND prompt_strategy = ?
+        LIMIT 1
+        """,
+        (run_id, dataset, instance_id, model_id, prompt_strategy),
+    ).fetchone()
+    return row is not None

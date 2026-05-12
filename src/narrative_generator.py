@@ -20,9 +20,10 @@ import pandas as pd
 from tqdm import tqdm
 
 from src.config import AppConfig, DatasetConfig, ModelConfig
-from src.data_loader import format_shap_table, load_dataset
-from src.db import db_connection, init_db, insert_narrative, insert_run
+from src.data_loader import load_dataset
+from src.db import db_connection, init_db, insert_narrative, insert_run, narrative_exists
 from src.llm_client import LLMClient
+from src.prompt_renderer import PromptRenderer
 
 
 # ---------------------------------------------------------------------------
@@ -37,19 +38,6 @@ def _make_run_id(run_name: str) -> str:
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
     short_uuid = uuid.uuid4().hex[:6]
     return f"{run_name}_{timestamp}_{short_uuid}"
-
-
-def _build_prompt(
-    cfg: AppConfig,
-    strategy: str,
-    dataset_name: str,
-    row: pd.Series,
-    shap_prefix: str,
-) -> str:
-    """Fill the prompt template for a single instance."""
-    template = cfg.load_prompt_template(strategy)
-    shap_table = format_shap_table(row, shap_prefix)
-    return template.format(dataset=dataset_name, shap_table=shap_table)
 
 
 # ---------------------------------------------------------------------------
@@ -109,13 +97,19 @@ def run_generation(
 
     Returns:
         The run_id string for the completed run.
+
+    Resume behaviour
+    ----------------
+    If the script is interrupted and restarted with the same run_id (not yet
+    supported via CLI — resume requires passing run_id explicitly), narratives
+    that already exist in the DB are skipped. When starting a fresh run the
+    run_id is generated automatically, so restarting always creates a new run.
+    To resume a crashed run, use the --resume-run-id flag in run_generation.py.
     """
-    # Build run metadata
     run_id = _make_run_id(cfg.run.name)
     run_created_at = _now_iso()
     config_snapshot = cfg.model_dump()
 
-    # Initialise DB and write run row
     db_path = Path(cfg.storage.db_path)
     narrative_dir = Path(cfg.storage.narrative_dir)
 
@@ -134,7 +128,6 @@ def run_generation(
     if dry_run:
         print("[DRY RUN] No LLM calls or DB writes will be made.\n")
 
-    # Filter models and datasets
     models = [m for m in cfg.models if filter_model is None or m.id == filter_model]
     datasets = [d for d in cfg.datasets if filter_dataset is None or d.name == filter_dataset]
     strategies = cfg.prompts.strategies
@@ -145,53 +138,68 @@ def run_generation(
         raise ValueError(f"No datasets matched filter '{filter_dataset}'.")
 
     client = LLMClient()
+    renderer = PromptRenderer(cfg)
 
-    # Count total iterations for progress bar
     total = sum(
         min(n_override or d.n_instances, d.n_instances) * len(models) * len(strategies)
         for d in datasets
     )
 
-    with tqdm(total=total, desc="Generating narratives") as pbar:
-        for dataset_cfg in datasets:
-            # Load data
-            df = load_dataset(dataset_cfg)
-            n = min(n_override, len(df)) if n_override is not None else len(df)
-            df = df.iloc[:n]
+    # Open a single DB connection for the entire generation run.
+    # This avoids the overhead of opening and closing a connection for every
+    # narrative write (which would be ~3,600 open/close cycles in a full run).
+    with db_connection(db_path) as conn:
+        with tqdm(total=total, desc="Generating narratives") as pbar:
+            for dataset_cfg in datasets:
+                df = load_dataset(dataset_cfg)
+                n = min(n_override, len(df)) if n_override is not None else len(df)
+                df = df.iloc[:n]
 
-            for model_cfg in models:
-                for strategy in strategies:
-                    for instance_id, row in df.iterrows():
-                        prompt = _build_prompt(
-                            cfg,
-                            strategy,
-                            dataset_cfg.name,
-                            row,
-                            dataset_cfg.shap_col_prefix,
-                        )
+                for model_cfg in models:
+                    for strategy in strategies:
+                        for instance_id, row in df.iterrows():
 
-                        if dry_run:
-                            print(f"\n--- {dataset_cfg.name} | {model_cfg.id} | {strategy} | instance {instance_id} ---")
-                            print(prompt[:500] + ("..." if len(prompt) > 500 else ""))
-                            pbar.update(1)
-                            continue
+                            # Resume: skip if this narrative was already generated
+                            if not dry_run and narrative_exists(
+                                conn,
+                                run_id=run_id,
+                                dataset=dataset_cfg.name,
+                                instance_id=int(instance_id),
+                                model_id=model_cfg.id,
+                                prompt_strategy=strategy,
+                            ):
+                                pbar.update(1)
+                                continue
 
-                        # Call LLM
-                        try:
-                            narrative_text = client.generate(prompt, model_cfg)
-                        except Exception as exc:
-                            tqdm.write(
-                                f"[ERROR] {dataset_cfg.name}/{model_cfg.id}/{strategy}"
-                                f"/instance {instance_id}: {exc}"
+                            prompt = renderer.render(
+                                strategy=strategy,
+                                dataset_name=dataset_cfg.name,
+                                row=row,
+                                shap_prefix=dataset_cfg.shap_col_prefix,
                             )
-                            pbar.update(1)
-                            continue
 
-                        narrative_id = str(uuid.uuid4())
-                        created_at = _now_iso()
+                            if dry_run:
+                                print(
+                                    f"\n--- {dataset_cfg.name} | {model_cfg.id} | "
+                                    f"{strategy} | instance {instance_id} ---"
+                                )
+                                print(prompt[:500] + ("..." if len(prompt) > 500 else ""))
+                                pbar.update(1)
+                                continue
 
-                        # Persist to DB
-                        with db_connection(db_path) as conn:
+                            try:
+                                narrative_text = client.generate(prompt, model_cfg)
+                            except Exception as exc:
+                                tqdm.write(
+                                    f"[ERROR] {dataset_cfg.name}/{model_cfg.id}/{strategy}"
+                                    f"/instance {instance_id}: {exc}"
+                                )
+                                pbar.update(1)
+                                continue
+
+                            narrative_id = str(uuid.uuid4())
+                            created_at = _now_iso()
+
                             insert_narrative(
                                 conn,
                                 narrative_id=narrative_id,
@@ -204,21 +212,20 @@ def run_generation(
                                 created_at=created_at,
                             )
 
-                        # Persist to JSON-lines
-                        _save_narrative_json(
-                            narrative_dir=narrative_dir,
-                            run_id=run_id,
-                            dataset=dataset_cfg.name,
-                            instance_id=int(instance_id),
-                            model_id=model_cfg.id,
-                            strategy=strategy,
-                            prompt=prompt,
-                            narrative_text=narrative_text,
-                            narrative_id=narrative_id,
-                            created_at=created_at,
-                        )
+                            _save_narrative_json(
+                                narrative_dir=narrative_dir,
+                                run_id=run_id,
+                                dataset=dataset_cfg.name,
+                                instance_id=int(instance_id),
+                                model_id=model_cfg.id,
+                                strategy=strategy,
+                                prompt=prompt,
+                                narrative_text=narrative_text,
+                                narrative_id=narrative_id,
+                                created_at=created_at,
+                            )
 
-                        pbar.update(1)
+                            pbar.update(1)
 
     print(f"\nDone. Run ID: {run_id}")
     return run_id

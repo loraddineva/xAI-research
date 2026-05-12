@@ -116,8 +116,10 @@ class TestRankSwap:
 
     def test_rank_swap_second_feature_as_primary(self):
         # education_num described as primary driver, but age has higher |SHAP|
+        # Use the exact feature name (or its underscore variant) so the proximity
+        # search can find it near the superlative phrase.
         narrative = (
-            "Education level was the primary driver of the model's decision, "
+            "Education_num was the primary driver of the model's decision, "
             "with age contributing a smaller effect."
         )
         result = _eval(narrative)

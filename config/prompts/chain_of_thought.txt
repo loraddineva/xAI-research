@@ -1,9 +1,9 @@
 You are an explainability assistant. You will reason step by step before writing your final narrative.
 
-Dataset: {dataset}
+Dataset: {{ dataset }}
 
 SHAP values for this instance:
-{shap_table}
+{{ shap_table }}
 
 Follow these steps before writing the narrative:
 

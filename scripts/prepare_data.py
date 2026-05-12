@@ -228,7 +228,7 @@ def prepare_dataset(
     explainer = Explainer(
         method="shap",
         model=model,
-        param_dict={"x_train": X_train_tensor},
+        param_dict={},
     )
 
     # get_explanations returns a tensor of shape (n_instances, n_features)

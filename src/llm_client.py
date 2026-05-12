@@ -22,7 +22,6 @@ Providers
 from __future__ import annotations
 
 import os
-import time
 from typing import Any
 
 from tenacity import (
@@ -45,12 +44,6 @@ _RETRY_KWARGS: dict[str, Any] = dict(
 )
 
 
-def _is_rate_limit(exc: BaseException) -> bool:
-    """Return True for errors that should trigger a retry."""
-    msg = str(exc).lower()
-    return any(k in msg for k in ("rate limit", "429", "too many requests", "overloaded"))
-
-
 # ---------------------------------------------------------------------------
 # Main client
 # ---------------------------------------------------------------------------
@@ -59,9 +52,9 @@ class LLMClient:
     """
     Provider-agnostic text generation client.
 
-    Each provider method is decorated with @retry independently so that the
-    import of the provider SDK is deferred — if a provider library is not
-    installed, only calls to that provider will fail.
+    Each provider method instantiates the SDK client once per generate() call,
+    then wraps only the API call itself in the retry loop. This means retries
+    reuse the same client object rather than reconstructing it on every attempt.
     """
 
     def generate(self, prompt: str, model_cfg: ModelConfig) -> str:
@@ -104,12 +97,11 @@ class LLMClient:
         except ImportError as e:
             raise ImportError("anthropic package not installed. Run: pip install anthropic") from e
 
-        @retry(
-            retry=retry_if_exception_type(Exception),
-            **_RETRY_KWARGS,
-        )
+        # Instantiate the client once — retries reuse it
+        client = _anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+
+        @retry(retry=retry_if_exception_type(Exception), **_RETRY_KWARGS)
         def _call() -> str:
-            client = _anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
             message = client.messages.create(
                 model=model_cfg.model_name,
                 max_tokens=model_cfg.max_tokens,
@@ -130,12 +122,10 @@ class LLMClient:
         except ImportError as e:
             raise ImportError("together package not installed. Run: pip install together") from e
 
-        @retry(
-            retry=retry_if_exception_type(Exception),
-            **_RETRY_KWARGS,
-        )
+        client = _Together(api_key=os.environ.get("TOGETHER_API_KEY"))
+
+        @retry(retry=retry_if_exception_type(Exception), **_RETRY_KWARGS)
         def _call() -> str:
-            client = _Together(api_key=os.environ.get("TOGETHER_API_KEY"))
             response = client.chat.completions.create(
                 model=model_cfg.model_name,
                 max_tokens=model_cfg.max_tokens,
@@ -152,16 +142,14 @@ class LLMClient:
 
     def _generate_mistral(self, prompt: str, model_cfg: ModelConfig) -> str:
         try:
-            from mistralai import Mistral as _Mistral
+            from mistralai.client import Mistral as _Mistral
         except ImportError as e:
             raise ImportError("mistralai package not installed. Run: pip install mistralai") from e
 
-        @retry(
-            retry=retry_if_exception_type(Exception),
-            **_RETRY_KWARGS,
-        )
+        client = _Mistral(api_key=os.environ.get("MISTRAL_API_KEY"))
+
+        @retry(retry=retry_if_exception_type(Exception), **_RETRY_KWARGS)
         def _call() -> str:
-            client = _Mistral(api_key=os.environ.get("MISTRAL_API_KEY"))
             response = client.chat.complete(
                 model=model_cfg.model_name,
                 max_tokens=model_cfg.max_tokens,
@@ -181,8 +169,8 @@ class LLMClient:
         Calls the local Ollama REST API.
         Set base_url in the model config (default: http://localhost:11434).
         """
-        import urllib.request
         import json
+        import urllib.request
 
         base_url = (model_cfg.base_url or "http://localhost:11434").rstrip("/")
         url = f"{base_url}/api/chat"
@@ -197,10 +185,7 @@ class LLMClient:
             },
         }).encode("utf-8")
 
-        @retry(
-            retry=retry_if_exception_type(Exception),
-            **_RETRY_KWARGS,
-        )
+        @retry(retry=retry_if_exception_type(Exception), **_RETRY_KWARGS)
         def _call() -> str:
             req = urllib.request.Request(
                 url,
