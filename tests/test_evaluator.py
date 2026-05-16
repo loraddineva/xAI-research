@@ -1,274 +1,249 @@
 """
 tests/test_evaluator.py
-Handcrafted test cases for each of the five hallucination types.
-
-Run with:
-    pytest tests/test_evaluator.py -v
+Tests for extraction parsing, SHAP comparison, and mocked evaluation.
 """
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.config import EvaluationConfig
-from src.evaluation.evaluator import (
-    EvaluationResult,
-    evaluate_narrative,
-    _check_sign_inversion,
-    _check_rank_swap,
-    _check_feature_fabrication,
-    _check_magnitude_distortion,
-    _check_omission,
+from src.evaluation.compare_to_shap import compare_to_shap
+from src.evaluation.extraction_parser import (
+    ExtractionResult,
+    FeatureExtraction,
+    parse_extraction_response,
 )
+from src.evaluation.evaluator import run_evaluation
 
-# Default config used across tests
-DEFAULT_CFG = EvaluationConfig(top_k_features=3, magnitude_threshold=0.5)
-
-# Ground-truth SHAP values for a representative adult-income instance
-SHAP_ADULT = {
-    "age":           0.42,   # positive, large (top-1)
-    "education_num": 0.31,   # positive, medium (top-2)
-    "hours_per_week": 0.18,  # positive, medium (top-3)
-    "capital_gain":  -0.05,  # negative, small
-}
-
-# ============================================================
-# Helper
-# ============================================================
-
-def _eval(narrative: str, shap: dict = SHAP_ADULT) -> EvaluationResult:
-    return evaluate_narrative(narrative, shap, DEFAULT_CFG)
+FEATURE_NAMES = ["age", "education", "hours_per_week"]
 
 
-# ============================================================
-# 1. Sign inversion
-# ============================================================
+def _extraction_json(**features: dict) -> str:
+    body = {
+        "features": features,
+        "unknown_features": [],
+    }
+    return json.dumps(body)
 
-class TestSignInversion:
-    def test_no_inversion_positive_feature(self):
-        narrative = (
-            "The applicant's age (52) increased the probability of high income, "
-            "contributing positively and raising the model's output."
+
+# ---------------------------------------------------------------------------
+# Parser
+# ---------------------------------------------------------------------------
+
+class TestExtractionParser:
+    def test_valid_json(self):
+        raw = _extraction_json(
+            age={
+                "exists": True,
+                "rank": 0,
+                "sign": 1,
+                "value": 39,
+                "assumption": "Age increases income.",
+            }
         )
-        result = _eval(narrative)
-        assert not result.sign_inversion
+        result = parse_extraction_response(raw, FEATURE_NAMES)
+        assert "age" in result.features
+        assert result.features["age"].rank == 0
+        assert result.features["age"].sign == 1
 
-    def test_no_inversion_negative_feature(self):
-        narrative = (
-            "Capital gain had a slightly negative effect, reducing the predicted income class."
+    def test_strips_markdown_fences(self):
+        inner = _extraction_json(
+            education={
+                "exists": True,
+                "rank": 0,
+                "sign": -1,
+                "value": None,
+                "assumption": "Education lowers risk.",
+            }
         )
-        result = _eval(narrative)
-        assert not result.sign_inversion
+        raw = f"```json\n{inner}\n```"
+        result = parse_extraction_response(raw, FEATURE_NAMES)
+        assert "education" in result.features
 
-    def test_inversion_positive_shap_stated_as_negative(self):
-        # age has positive SHAP (0.42) but narrative says it reduces / lowers
-        narrative = (
-            "The applicant's age significantly decreased the likelihood of high income, "
-            "pushing the prediction lower."
+    def test_rejects_unknown_feature_key(self):
+        raw = json.dumps({
+            "features": {
+                "not_a_feature": {
+                    "exists": True,
+                    "rank": 0,
+                    "sign": 1,
+                    "value": None,
+                    "assumption": "Invalid.",
+                }
+            },
+            "unknown_features": [],
+        })
+        with pytest.raises(ValueError, match="not in the dataset"):
+            parse_extraction_response(raw, FEATURE_NAMES)
+
+    def test_rejects_unknown_overlap(self):
+        raw = json.dumps({
+            "features": {},
+            "unknown_features": ["age"],
+        })
+        with pytest.raises(ValueError, match="overlaps"):
+            parse_extraction_response(raw, FEATURE_NAMES)
+
+    def test_rejects_invalid_sign(self):
+        raw = _extraction_json(
+            age={
+                "exists": True,
+                "rank": 0,
+                "sign": 2,
+                "value": None,
+                "assumption": "Bad sign.",
+            }
         )
-        result = _eval(narrative)
-        assert result.sign_inversion, "Should flag: positive SHAP for age described as negative"
+        with pytest.raises(ValueError, match="sign must be"):
+            parse_extraction_response(raw, FEATURE_NAMES)
 
-    def test_inversion_negative_shap_stated_as_positive(self):
-        # capital_gain has negative SHAP (-0.05) but narrative says it boosted
-        narrative = (
-            "Capital gain boosted the prediction substantially, increasing the probability "
-            "of high income."
+
+# ---------------------------------------------------------------------------
+# compare_to_shap
+# ---------------------------------------------------------------------------
+
+def _shap(age: float = 0.5, education: float = -0.3, hours: float = 0.1):
+    return [
+        ["age", age],
+        ["education", education],
+        ["hours_per_week", hours],
+    ]
+
+
+class TestCompareToShap:
+    def test_sign_inversion(self):
+        ext = ExtractionResult(
+            features={
+                "age": FeatureExtraction(
+                    exists=True, rank=0, sign=-1, value=None,
+                    assumption="Age decreases income.",
+                )
+            }
         )
-        shap = {**SHAP_ADULT, "capital_gain": -0.45}  # make it clearly large negative
-        result = evaluate_narrative(narrative, shap, DEFAULT_CFG)
-        assert result.sign_inversion, "Should flag: negative SHAP for capital_gain described as positive"
+        cmp = compare_to_shap(ext, _shap(age=0.5), top_k_features=3)
+        assert cmp.sign_inversion == 1
 
-    def test_ambiguous_context_no_false_positive(self):
-        # Narrative is neutral — no direction words near age
-        narrative = "The applicant is 52 years old and has 13 years of education."
-        result = _eval(narrative)
-        assert not result.sign_inversion
-
-
-# ============================================================
-# 2. Rank swap
-# ============================================================
-
-class TestRankSwap:
-    def test_no_rank_swap_correct_top(self):
-        # age is correctly identified as most important
-        narrative = (
-            "Age was the most important factor, followed by education level "
-            "and hours worked per week."
+    def test_rank_swap(self):
+        ext = ExtractionResult(
+            features={
+                "education": FeatureExtraction(
+                    exists=True, rank=0, sign=-1, value=None,
+                    assumption="Education is most important.",
+                )
+            }
         )
-        result = _eval(narrative)
-        assert not result.rank_swap
+        cmp = compare_to_shap(ext, _shap(), top_k_features=3)
+        assert cmp.rank_swap == 1
 
-    def test_rank_swap_wrong_feature_as_top(self):
-        # capital_gain (bottom feature) described as most important
-        narrative = (
-            "Capital gain was the most important factor driving the prediction, "
-            "with age and education playing secondary roles."
+    def test_feature_fabrication(self):
+        ext = ExtractionResult(
+            features={},
+            unknown_features=["salary_bracket"],
         )
-        result = _eval(narrative)
-        assert result.rank_swap, "Should flag: capital_gain described as most important but it is bottom-ranked"
+        cmp = compare_to_shap(ext, _shap(), top_k_features=3)
+        assert cmp.feature_fabrication == 1
 
-    def test_rank_swap_second_feature_as_primary(self):
-        # education_num described as primary driver, but age has higher |SHAP|
-        # Use the exact feature name (or its underscore variant) so the proximity
-        # search can find it near the superlative phrase.
-        narrative = (
-            "Education_num was the primary driver of the model's decision, "
-            "with age contributing a smaller effect."
+    def test_omission(self):
+        ext = ExtractionResult(
+            features={
+                "hours_per_week": FeatureExtraction(
+                    exists=True, rank=0, sign=1, value=None,
+                    assumption="Hours matter.",
+                )
+            }
         )
-        result = _eval(narrative)
-        assert result.rank_swap, "Should flag: education_num described as primary, but age is top"
+        cmp = compare_to_shap(ext, _shap(), top_k_features=2)
+        assert cmp.omission == 1
 
-    def test_no_rank_swap_no_superlatives(self):
-        narrative = (
-            "Age, education, and hours worked all contributed positively "
-            "to the model's prediction."
+    def test_no_hallucination_when_aligned(self):
+        ext = ExtractionResult(
+            features={
+                "age": FeatureExtraction(
+                    exists=True, rank=0, sign=1, value=None,
+                    assumption="Age drives prediction.",
+                ),
+                "education": FeatureExtraction(
+                    exists=True, rank=1, sign=-1, value=None,
+                    assumption="Education reduces income.",
+                ),
+                "hours_per_week": FeatureExtraction(
+                    exists=True, rank=2, sign=1, value=None,
+                    assumption="Hours help.",
+                ),
+            }
         )
-        result = _eval(narrative)
-        assert not result.rank_swap
+        cmp = compare_to_shap(ext, _shap(), top_k_features=3)
+        assert cmp.any_hallucination == 0
 
 
-# ============================================================
-# 3. Feature fabrication
-# ============================================================
+# ---------------------------------------------------------------------------
+# End-to-end (mocked LLM)
+# ---------------------------------------------------------------------------
 
-class TestFeatureFabrication:
-    def test_no_fabrication_valid_features(self):
-        narrative = (
-            "The applicant's age and education_num were the dominant contributors. "
-            "Hours_per_week and capital_gain also played a role."
-        )
-        result = _eval(narrative)
-        assert not result.feature_fabrication
-
-    def test_fabrication_invented_feature(self):
-        # 'marital_status' is not in SHAP_ADULT
-        narrative = (
-            "Age was important, and marital_status also contributed positively "
-            "to the prediction."
-        )
-        result = _eval(narrative)
-        assert result.feature_fabrication, "Should flag: marital_status not in SHAP dict"
-
-    def test_fabrication_underscore_token_not_in_features(self):
-        # 'job_type' not in SHAP_ADULT
-        narrative = (
-            "The model was heavily influenced by job_type, which is a key determinant."
-        )
-        result = _eval(narrative)
-        assert result.feature_fabrication, "Should flag: job_type not in SHAP dict"
+MOCK_EXTRACTION = json.dumps({
+    "features": {
+        "age": {
+            "exists": True,
+            "rank": 0,
+            "sign": 1,
+            "value": None,
+            "assumption": "Older applicants have higher income.",
+        }
+    },
+    "unknown_features": [],
+})
 
 
-# ============================================================
-# 4. Magnitude distortion
-# ============================================================
+class TestRunEvaluationMocked:
+    @patch("src.evaluation.evaluator.LLMClient")
+    @patch("src.evaluation.evaluator.load_narratives_csv")
+    @patch("src.evaluation.evaluator.narratives_csv_path")
+    @patch("src.evaluation.evaluator.generation_run_dir")
+    def test_run_evaluation_writes_csv(
+        self,
+        mock_gen_run_dir,
+        mock_narr_csv_path,
+        mock_load_narr,
+        mock_llm_cls,
+    ):
+        from src.config import load_config
 
-class TestMagnitudeDistortion:
-    def test_no_distortion_correct_labels(self):
-        # age (large) described as significant, capital_gain (small) as minor
-        narrative = (
-            "Age had a significant positive effect. "
-            "Capital gain had only a minor influence on the outcome."
-        )
-        result = _eval(narrative)
-        assert not result.magnitude_distortion
+        cfg = load_config()
+        run_id = "test_run_eval"
 
-    def test_distortion_large_feature_called_minor(self):
-        # age has 0.42 SHAP (largest) but narrative calls it minor
-        narrative = (
-            "Age had only a slight and negligible effect on the prediction, "
-            "contributing minimally to the output."
-        )
-        result = _eval(narrative)
-        assert result.magnitude_distortion, "Should flag: large-SHAP age called minor"
+        mock_gen_run_dir.return_value = Path("outputs/generation") / run_id
+        mock_narr_csv_path.return_value = mock_gen_run_dir.return_value / "narratives.csv"
 
-    def test_distortion_small_feature_called_dominant(self):
-        # capital_gain has 0.05 SHAP (smallest) but narrative calls it dominant
-        narrative = (
-            "Capital gain was the dominant and most powerful factor, "
-            "substantially driving the model's decision."
-        )
-        result = _eval(narrative)
-        assert result.magnitude_distortion, "Should flag: small-SHAP capital_gain called dominant"
+        mock_load_narr.return_value = __import__("pandas").DataFrame([{
+            "narrative_id": "n1",
+            "run_id": run_id,
+            "dataset": "adult",
+            "instance_id": 0,
+            "model_id": "claude-opus",
+            "prompt_strategy": "martens",
+            "narrative_text": "Age drove the prediction.",
+            "shap_values_sorted": json.dumps(_shap()),
+            "error": "",
+        }])
 
-    def test_no_distortion_medium_feature_neutral_label(self):
-        narrative = (
-            "Education level contributed to the prediction alongside other factors."
-        )
-        result = _eval(narrative)
-        assert not result.magnitude_distortion
+        mock_client = MagicMock()
+        mock_client.generate.return_value = MOCK_EXTRACTION
+        mock_llm_cls.return_value = mock_client
 
+        with patch.object(Path, "exists", return_value=True):
+            with patch("src.evaluation.evaluator._feature_names_for_dataset") as mock_fn:
+                mock_fn.return_value = FEATURE_NAMES
+                result = run_evaluation(cfg, run_id, dry_run=False, n_limit=1)
 
-# ============================================================
-# 5. Omission
-# ============================================================
-
-class TestOmission:
-    def test_no_omission_all_top3_mentioned(self):
-        narrative = (
-            "Age, education_num, and hours_per_week all contributed to the model's "
-            "prediction of high income."
-        )
-        result = _eval(narrative)
-        assert not result.omission
-
-    def test_omission_top1_not_mentioned(self):
-        # age (top-1) completely absent
-        narrative = (
-            "Education and hours per week drove the prediction, with capital gain "
-            "having a small negative effect."
-        )
-        result = _eval(narrative)
-        assert result.omission, "Should flag: age (top-1 SHAP) not mentioned"
-
-    def test_omission_top3_partial(self):
-        # hours_per_week (top-3) missing
-        narrative = (
-            "Age was the strongest driver. Education level also contributed positively."
-        )
-        result = _eval(narrative)
-        assert result.omission, "Should flag: hours_per_week (top-3) not mentioned"
-
-    def test_no_omission_with_variant_names(self):
-        # Test that 'education num' (space variant) is found for 'education_num'
-        narrative = (
-            "The applicant's age, education num, and hours per week all had positive "
-            "effects on the predicted income."
-        )
-        result = _eval(narrative)
-        assert not result.omission
-
-
-# ============================================================
-# EvaluationResult helpers
-# ============================================================
-
-class TestEvaluationResult:
-    def test_any_hallucination_false_when_clean(self):
-        r = EvaluationResult()
-        assert not r.any_hallucination
-
-    def test_any_hallucination_true_when_flagged(self):
-        r = EvaluationResult(sign_inversion=True)
-        assert r.any_hallucination
-
-    def test_to_dict_has_all_keys(self):
-        r = EvaluationResult(omission=True, notes=["omission: age missing"])
-        d = r.to_dict()
-        for key in ["sign_inversion", "rank_swap", "feature_fabrication",
-                    "magnitude_distortion", "omission", "any_hallucination", "notes"]:
-            assert key in d
-
-    def test_notes_str_empty(self):
-        r = EvaluationResult()
-        assert r.notes_str() == ""
-
-    def test_notes_str_joined(self):
-        r = EvaluationResult(notes=["a", "b"])
-        assert r.notes_str() == "a; b"
+        assert result == run_id
+        eval_csv = Path(cfg.evaluation.export_dir) / run_id / "evaluations.csv"
+        assert eval_csv.exists()
+        df = __import__("pandas").read_csv(eval_csv)
+        assert len(df) >= 1

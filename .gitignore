@@ -26,13 +26,10 @@ data/raw/*
 !data/raw/.gitkeep
 
 # Outputs
-outputs/narratives/*
-!outputs/narratives/.gitkeep
-outputs/evaluations/*
-!outputs/evaluations/.gitkeep
+outputs/generation/*
+!outputs/generation/.gitkeep
 outputs/figures/*
 !outputs/figures/.gitkeep
-outputs/results.db
 
 # OS
 .DS_Store

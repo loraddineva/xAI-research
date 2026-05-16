@@ -57,13 +57,19 @@ class LLMClient:
     same client object rather than reconstructing it on every attempt.
     """
 
-    def generate(self, prompt: str, model_cfg: ModelConfig) -> str:
+    def generate(
+        self,
+        prompt: str,
+        model_cfg: ModelConfig,
+        max_tokens: int | None = None,
+    ) -> str:
         """
         Generate a completion for *prompt* using the model specified in *model_cfg*.
 
         Args:
             prompt:     The full prompt string (system + user content merged).
             model_cfg:  A ModelConfig instance from AppConfig.models.
+            max_tokens: Optional override for ``model_cfg.max_tokens`` (e.g. CoT runs).
 
         Returns:
             The model's response as a plain string (stripped of leading/trailing
@@ -73,6 +79,7 @@ class LLMClient:
             ValueError:  Unknown provider.
             Exception:   Provider API errors after all retries exhausted.
         """
+        tokens = max_tokens if max_tokens is not None else model_cfg.max_tokens
         provider = model_cfg.provider.lower()
         dispatch = {
             "anthropic": self._generate_anthropic,
@@ -85,13 +92,15 @@ class LLMClient:
                 f"Unknown provider '{provider}'. "
                 f"Valid options: {list(dispatch.keys())}"
             )
-        return dispatch[provider](prompt, model_cfg)
+        return dispatch[provider](prompt, model_cfg, tokens)
 
     # ------------------------------------------------------------------
     # Anthropic
     # ------------------------------------------------------------------
 
-    def _generate_anthropic(self, prompt: str, model_cfg: ModelConfig) -> str:
+    def _generate_anthropic(
+        self, prompt: str, model_cfg: ModelConfig, max_tokens: int
+    ) -> str:
         try:
             import anthropic as _anthropic
         except ImportError as e:
@@ -103,7 +112,7 @@ class LLMClient:
         def _call() -> str:
             message = client.messages.create(
                 model=model_cfg.model_name,
-                max_tokens=model_cfg.max_tokens,
+                max_tokens=max_tokens,
                 temperature=model_cfg.temperature,
                 messages=[{"role": "user", "content": prompt}],
             )
@@ -115,7 +124,9 @@ class LLMClient:
     # Together AI
     # ------------------------------------------------------------------
 
-    def _generate_together(self, prompt: str, model_cfg: ModelConfig) -> str:
+    def _generate_together(
+        self, prompt: str, model_cfg: ModelConfig, max_tokens: int
+    ) -> str:
         try:
             from together import Together as _Together
         except ImportError as e:
@@ -127,7 +138,7 @@ class LLMClient:
         def _call() -> str:
             response = client.chat.completions.create(
                 model=model_cfg.model_name,
-                max_tokens=model_cfg.max_tokens,
+                max_tokens=max_tokens,
                 temperature=model_cfg.temperature,
                 messages=[{"role": "user", "content": prompt}],
             )
@@ -139,7 +150,9 @@ class LLMClient:
     # Mistral
     # ------------------------------------------------------------------
 
-    def _generate_mistral(self, prompt: str, model_cfg: ModelConfig) -> str:
+    def _generate_mistral(
+        self, prompt: str, model_cfg: ModelConfig, max_tokens: int
+    ) -> str:
         try:
             from mistralai.client import Mistral as _Mistral
         except ImportError as e:
@@ -151,7 +164,7 @@ class LLMClient:
         def _call() -> str:
             response = client.chat.complete(
                 model=model_cfg.model_name,
-                max_tokens=model_cfg.max_tokens,
+                max_tokens=max_tokens,
                 temperature=model_cfg.temperature,
                 messages=[{"role": "user", "content": prompt}],
             )
@@ -163,7 +176,9 @@ class LLMClient:
     # Ollama (local)
     # ------------------------------------------------------------------
 
-    def _generate_ollama(self, prompt: str, model_cfg: ModelConfig) -> str:
+    def _generate_ollama(
+        self, prompt: str, model_cfg: ModelConfig, max_tokens: int
+    ) -> str:
         """
         Calls the local Ollama REST API.
         Set base_url in the model config (default: http://localhost:11434).
@@ -180,7 +195,7 @@ class LLMClient:
             "stream": False,
             "options": {
                 "temperature": model_cfg.temperature,
-                "num_predict": model_cfg.max_tokens,
+                "num_predict": max_tokens,
             },
         }).encode("utf-8")
 

@@ -1,17 +1,11 @@
 """
 src/generation/prompt_renderer.py
-Jinja2 renderer for the single Martens-style narrative prompt.
-
-The renderer loads the template file specified by ``cfg.prompt.template``
-and injects:
-    - dataset name + per-dataset task description / class labels,
-    - the model's predicted probability and predicted class label text,
-    - a SHAP table sorted from most positive to most negative.
+Jinja2 renderer for narrative generation prompt strategies.
 
 Public API
 ----------
     PromptRenderer(cfg)
-    renderer.render(dataset_cfg, row) -> str
+    renderer.render(dataset_cfg, row, strategy_id) -> str
 """
 
 from __future__ import annotations
@@ -21,58 +15,61 @@ from pathlib import Path
 import pandas as pd
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
-from src.config import AppConfig, DatasetConfig
+from src.config import AppConfig, DatasetConfig, PromptStrategyConfig
 from src.data_loader import format_shap_table
 
 
 class PromptRenderer:
     """
-    Loads the configured prompt template once and renders it per instance.
+    Loads all configured prompt templates and renders one per instance.
 
     Args:
-        cfg: A loaded :class:`AppConfig`. ``cfg.prompt.template`` is treated
-             as the path to the Jinja2 template file.
+        cfg: A loaded :class:`AppConfig`. Templates are listed under
+             ``cfg.prompt.strategies``.
     """
 
     def __init__(self, cfg: AppConfig) -> None:
-        template_path = Path(cfg.prompt.template)
-        if not template_path.exists():
-            raise FileNotFoundError(
-                f"Prompt template not found: {template_path.resolve()}"
-            )
+        self._cfg = cfg
+        self._template_names: dict[str, str] = {}
+        search_dirs: set[str] = set()
 
-        # FileSystemLoader needs a directory; we then look up the template
-        # by its basename. This keeps the standard Jinja loader semantics
-        # (search path, includes, etc.) without forcing a custom loader.
+        for strategy in cfg.prompt.strategies:
+            template_path = Path(strategy.template)
+            if not template_path.exists():
+                raise FileNotFoundError(
+                    f"Prompt template not found: {template_path.resolve()}"
+                )
+            search_dirs.add(str(template_path.parent))
+            self._template_names[strategy.id] = template_path.name
+
         self._env = Environment(
-            loader=FileSystemLoader(str(template_path.parent)),
-            # StrictUndefined raises an error if a variable used in a template
-            # is not provided — catches typos early rather than silently
-            # rendering an empty string.
+            loader=FileSystemLoader(sorted(search_dirs)),
             undefined=StrictUndefined,
             keep_trailing_newline=True,
         )
-        self._template_name = template_path.name
 
-    # ------------------------------------------------------------------
-    # Public render
-    # ------------------------------------------------------------------
+    def get_strategy(self, strategy_id: str) -> PromptStrategyConfig:
+        return self._cfg.prompt.get_strategy(strategy_id)
 
-    def render(self, dataset_cfg: DatasetConfig, row: pd.Series) -> str:
+    def render(
+        self,
+        dataset_cfg: DatasetConfig,
+        row: pd.Series,
+        strategy_id: str,
+    ) -> str:
         """
-        Render the narrative prompt for one instance.
+        Render the narrative prompt for one instance and strategy.
 
         The row must contain ``pred_proba`` and ``pred_label`` columns
-        (produced by the updated ``scripts/prepare_data.py``). If they are
-        missing, prep the data again with the new script.
+        (produced by ``scripts/prepare_data.py``).
         """
-        try:
-            template = self._env.get_template(self._template_name)
-        except Exception as exc:
-            raise FileNotFoundError(
-                f"Prompt template '{self._template_name}' not found in "
-                f"{self._env.loader.searchpath}"  # type: ignore[union-attr]
-            ) from exc
+        if strategy_id not in self._template_names:
+            raise KeyError(
+                f"Unknown prompt strategy '{strategy_id}'. "
+                f"Configured: {list(self._template_names)}"
+            )
+
+        template = self._env.get_template(self._template_names[strategy_id])
 
         if "pred_proba" not in row or "pred_label" not in row:
             raise KeyError(

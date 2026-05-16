@@ -142,7 +142,7 @@ def export_all_figures(
         evals_df: Evaluations DataFrame (loaded from DB or CSV).
                   Must have columns: model_id, prompt_strategy, dataset,
                   any_hallucination, sign_inversion, rank_swap,
-                  feature_fabrication, magnitude_distortion, omission.
+                  feature_fabrication, omission.
         cfg:      AppConfig (provides figure_dir, format, dpi).
         run_id:   Used to name the output subdirectory.
 

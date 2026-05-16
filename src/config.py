@@ -50,30 +50,55 @@ class ModelConfig(BaseModel):
     base_url: Optional[str] = None   # used by ollama
 
 
+class PromptStrategyConfig(BaseModel):
+    """One generation prompt strategy (template + optional token override)."""
+
+    id: str
+    template: str
+    max_tokens: Optional[int] = None
+
+
 class PromptConfig(BaseModel):
-    """Single narrative prompt (no zero/few/CoT split)."""
+    """Narrative generation prompt strategies crossed in each run."""
 
-    template: str = "config/prompts/narrative.j2"
+    strategies: List[PromptStrategyConfig] = Field(
+        default_factory=lambda: [
+            PromptStrategyConfig(
+                id="martens",
+                template="config/prompts/narrative.j2",
+            ),
+            PromptStrategyConfig(
+                id="chain_of_thought",
+                template="config/prompts/chain_of_thought.j2",
+                max_tokens=1024,
+            ),
+        ]
+    )
 
-
-class EvaluationConfig(BaseModel):
-    top_k_features: int = 3
-    magnitude_threshold: float = 0.5
-    use_llm_judge: bool = False
-    llm_judge_model: str = "claude-opus"
+    def get_strategy(self, strategy_id: str) -> PromptStrategyConfig:
+        for s in self.strategies:
+            if s.id == strategy_id:
+                return s
+        raise KeyError(f"Prompt strategy '{strategy_id}' not found in config.")
 
 
 class StorageConfig(BaseModel):
-    db_path: str = "outputs/results.db"
     generation_dir: str = "outputs/generation/"
-    export_dir: str = "outputs/evaluations/"
-    narrative_dir: str = "outputs/narratives/"      # legacy alias
 
 
 class VisualisationConfig(BaseModel):
     figure_dir: str = "outputs/figures/"
     format: str = "png"
     dpi: int = 150
+
+
+class EvaluationConfig(BaseModel):
+    """LLM extraction + SHAP comparison evaluation settings."""
+
+    extraction_model_id: str = "claude-opus"
+    template: str = "config/prompts/extract.j2"
+    top_k_features: int = 3
+    export_dir: str = "outputs/evaluations/"
 
 
 # ---------------------------------------------------------------------------
@@ -85,21 +110,21 @@ class AppConfig(BaseModel):
     datasets: List[DatasetConfig] = Field(default_factory=list)
     models: List[ModelConfig] = Field(default_factory=list)
     prompt: PromptConfig = Field(default_factory=PromptConfig)
-    evaluation: EvaluationConfig = Field(default_factory=EvaluationConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
     visualisation: VisualisationConfig = Field(default_factory=VisualisationConfig)
+    evaluation: EvaluationConfig = Field(default_factory=EvaluationConfig)
 
     # ------------------------------------------------------------------
     # Convenience helpers
     # ------------------------------------------------------------------
 
-    def prompt_template_path(self) -> Path:
-        """Resolve the absolute path of the narrative prompt template."""
-        return Path(self.prompt.template)
+    def prompt_template_path(self, strategy_id: str = "martens") -> Path:
+        """Resolve the absolute path of a strategy's prompt template."""
+        return Path(self.prompt.get_strategy(strategy_id).template)
 
-    def load_prompt_template(self) -> str:
-        """Read and return the raw text of the narrative prompt template."""
-        path = self.prompt_template_path()
+    def load_prompt_template(self, strategy_id: str = "martens") -> str:
+        """Read and return the raw text of a strategy's prompt template."""
+        path = self.prompt_template_path(strategy_id)
         if not path.exists():
             raise FileNotFoundError(f"Prompt template not found: {path}")
         return path.read_text(encoding="utf-8")

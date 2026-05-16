@@ -41,19 +41,21 @@ models:
   #   base_url: "http://localhost:11434"
 
 prompt:
-  template: "config/prompts/narrative.j2"
-
-evaluation:
-  top_k_features: 3
-  magnitude_threshold: 0.5
-  use_llm_judge: false
-  llm_judge_model: "claude-opus"     # model id (must match one of models[].id above)
+  strategies:
+    - id: martens
+      template: "config/prompts/narrative.j2"
+    - id: chain_of_thought
+      template: "config/prompts/chain_of_thought.j2"
+      max_tokens: 1024
 
 storage:
-  db_path: "outputs/results.db"
   generation_dir: "outputs/generation/"
+
+evaluation:
+  extraction_model_id: "claude-opus"
+  template: "config/prompts/extract.j2"
+  top_k_features: 3
   export_dir: "outputs/evaluations/"
-  narrative_dir: "outputs/narratives/"     # legacy alias; new runs write to generation_dir
 
 visualisation:
   figure_dir: "outputs/figures/"

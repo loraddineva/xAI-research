@@ -1,0 +1,18 @@
+An AI model was used to {{ task_description }}. The input features describe the instance, and the target variable indicates whether the instance belongs to the class "{{ positive_class_label }}".
+
+An AI model estimated a {{ "%.0f"|format(pred_proba * 100) }}% probability that the instance belongs to the positive class, "{{ positive_class_label }}". Based on this probability, the model's final predicted class was "{{ pred_class_text }}". The provided SHAP table was generated to explain this outcome. It includes every feature along with its value for that instance, and the SHAP value assigned to it. Numeric features are shown in their original units; categorical features are shown as their integer code followed by the human-readable category in square brackets, e.g. "checking_status: 1 [< 0 DM]". The scores in the table are sorted from most positive to most negative.
+
+SHAP table:
+{{ shap_table }}
+
+Before writing the narrative, work through Steps 1–3 using ONLY the SHAP table above. Do not invent features or directions not supported by the table.
+
+Step 1 — Rank: List the top 5 features by absolute SHAP value (highest first). For each, give: feature name | SHAP value | direction (toward "{{ positive_class_label }}" if SHAP > 0, else toward "{{ negative_class_label }}").
+
+Step 2 — Negligible: List features with clearly smaller |SHAP| than the top 5 that you will not emphasise in the narrative.
+
+Step 3 — Check: State which single feature has the largest |SHAP| and confirm its sign matches Step 1.
+
+Step 4 — Narrative: Under the heading exactly "Narrative:", write 1–2 short paragraphs explaining why the model predicted "{{ pred_class_text }}". Mention the top 3 features by |SHAP| by name. For each mentioned feature, state whether it pushed toward "{{ positive_class_label }}" or "{{ negative_class_label }}". Do not mention features not in the SHAP table. Do not claim feature interactions unless they follow directly from the SHAP signs and ranks in Steps 1–3. End with one sentence summarising why this classification may have occurred.
+
+Put all reasoning in Steps 1–3; put only the final prose under "Narrative:".

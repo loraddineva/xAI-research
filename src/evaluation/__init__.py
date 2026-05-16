@@ -1,14 +1,5 @@
-"""
-src/evaluation
-Evaluation subpackage. Currently exposes the existing rule-based evaluator
-unchanged; will be revised once the new generation output format
-(outputs/generation/<run_id>/) becomes the canonical input.
-"""
+"""Evaluation: LLM extraction + SHAP comparison."""
 
-from src.evaluation.evaluator import (
-    EvaluationResult,
-    evaluate_narrative,
-    llm_judge,
-)
+from src.evaluation.evaluator import run_evaluation
 
-__all__ = ["EvaluationResult", "evaluate_narrative", "llm_judge"]
+__all__ = ["run_evaluation"]

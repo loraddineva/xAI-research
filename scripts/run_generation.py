@@ -66,6 +66,11 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Override n_instances for all datasets (useful for quick tests).",
     )
+    parser.add_argument(
+        "--strategy",
+        default=None,
+        help="Run only for this prompt strategy id (e.g. martens, chain_of_thought).",
+    )
     return parser.parse_args()
 
 
@@ -78,11 +83,13 @@ def main() -> None:
         dry_run=args.dry_run,
         filter_model=args.model,
         filter_dataset=args.dataset,
+        filter_strategy=args.strategy,
         n_override=args.n,
     )
 
     if not args.dry_run:
-        print(f"\nTo evaluate this run:\n  python scripts/run_evaluation.py --run-id {run_id}")
+        print(f"\nNarratives saved under outputs/generation/{run_id}/")
+        print(f"To export dataset figures:\n  python scripts/export_results.py --run-id {run_id} --figures")
 
 
 if __name__ == "__main__":

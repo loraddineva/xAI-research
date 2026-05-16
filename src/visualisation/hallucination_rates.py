@@ -24,7 +24,6 @@ HALLUCINATION_TYPES = [
     "sign_inversion",
     "rank_swap",
     "feature_fabrication",
-    "magnitude_distortion",
     "omission",
 ]
 
@@ -32,7 +31,6 @@ TYPE_LABELS = {
     "sign_inversion": "Sign\nInversion",
     "rank_swap": "Rank\nSwap",
     "feature_fabrication": "Feature\nFabrication",
-    "magnitude_distortion": "Magnitude\nDistortion",
     "omission": "Omission",
 }
 

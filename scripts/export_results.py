@@ -1,24 +1,17 @@
 """
 scripts/export_results.py
-Dump a completed run from SQLite to CSV files for sharing / archiving.
-Optionally also produce and save all figures.
+Inspect a completed generation run and optionally produce dataset figures.
 
 Usage
 -----
-    # Export narratives + evaluations to CSV
     python scripts/export_results.py --run-id <run_id>
-
-    # Also produce and save all figures
     python scripts/export_results.py --run-id <run_id> --figures
-
-    # Custom config
     python scripts/export_results.py --run-id <run_id> --config config/default.yaml
 """
 
 from __future__ import annotations
 
 import argparse
-import csv
 import sys
 from pathlib import Path
 
@@ -28,84 +21,121 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 load_dotenv()
 
 from src.config import load_config
-from src.db import (
-    db_connection,
-    get_evaluations_for_run,
-    get_narratives_for_run,
+from src.data_loader import load_dataset
+from src.storage.narratives_store import (
     get_run,
+    load_narratives_csv,
+    narratives_csv_path,
+    run_dir,
 )
 
 
-def export_run(run_id: str, cfg_path: str = "config/default.yaml", figures: bool = False) -> None:
-    """Export all data for a run to CSV and optionally produce figures."""
+def export_run(
+    run_id: str,
+    cfg_path: str = "config/default.yaml",
+    figures: bool = False,
+    eval_figures: bool = False,
+) -> None:
+    """Print run summary; optionally export dataset or evaluation figures."""
     cfg = load_config(cfg_path)
-    db_path = Path(cfg.storage.db_path)
-    export_dir = Path(cfg.storage.export_dir)
-    export_dir.mkdir(parents=True, exist_ok=True)
-
-    with db_connection(db_path) as conn:
-        run_meta = get_run(conn, run_id)
-        narratives = get_narratives_for_run(conn, run_id)
-        evaluations = get_evaluations_for_run(conn, run_id)
+    run_meta = get_run(cfg.storage.generation_dir, run_id)
 
     if run_meta is None:
-        print(f"Run '{run_id}' not found in database.")
+        print(f"Run '{run_id}' not found (no narratives.csv under generation dir).")
         sys.exit(1)
 
-    print(f"Run: {run_meta['run_name']} ({run_id})")
-    print(f"  Narratives : {len(narratives)}")
-    print(f"  Evaluations: {len(evaluations)}")
+    csv_path = narratives_csv_path(run_dir(cfg, run_id))
+    narratives_df = load_narratives_csv(csv_path)
 
-    # --- Export narratives ---
-    narr_path = export_dir / f"{run_id}_narratives.csv"
-    if narratives:
-        with narr_path.open("w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=list(narratives[0].keys()))
-            writer.writeheader()
-            writer.writerows(narratives)
-        print(f"\nNarratives saved to: {narr_path}")
+    print(f"Run: {run_meta.get('run_name', run_id)} ({run_id})")
+    print(f"  Path       : {run_meta['path']}")
+    print(f"  Narratives : {len(narratives_df)}")
+    if "error" in narratives_df.columns:
+        n_failed = (narratives_df["error"].fillna("").astype(str) != "").sum()
+        print(f"  Failed     : {n_failed}")
 
-    # --- Export evaluations ---
-    eval_path = export_dir / f"{run_id}_evaluations.csv"
-    if evaluations:
-        with eval_path.open("w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=list(evaluations[0].keys()))
-            writer.writeheader()
-            writer.writerows(evaluations)
-        print(f"Evaluations saved to: {eval_path}")
+    if "dataset" in narratives_df.columns:
+        print(f"  Datasets   : {', '.join(sorted(narratives_df['dataset'].unique()))}")
+    if "model_id" in narratives_df.columns:
+        print(f"  Models     : {', '.join(sorted(narratives_df['model_id'].unique()))}")
 
-    # --- Optionally export figures ---
-    if figures:
-        if not evaluations:
-            print("\nNo evaluations found — skipping figures.")
-            return
+    print(f"\nCanonical CSV: {csv_path}")
 
-        import pandas as pd
+    if eval_figures:
+        from src.storage.evaluations_store import (
+            eval_run_dir,
+            evaluations_csv_path,
+            load_evaluations_csv,
+        )
         from src.visualisation.export import export_all_figures
 
-        evals_df = pd.DataFrame(evaluations)
-        saved = export_all_figures(evals_df, cfg, run_id)
-        print(f"\n{len(saved)} figures saved to {cfg.visualisation.figure_dir}{run_id}/")
+        eval_dir = eval_run_dir(cfg.evaluation.export_dir, run_id)
+        eval_csv = evaluations_csv_path(eval_dir)
+        if not eval_csv.exists():
+            print(
+                f"\nNo evaluations found at {eval_csv}. "
+                f"Run: python scripts/run_evaluation.py --run-id {run_id}"
+            )
+            sys.exit(1)
+        evals_df = load_evaluations_csv(eval_csv)
+        evals_df = evals_df[evals_df["parse_error"].fillna("").astype(str) == ""]
+        print(f"\nEvaluations CSV: {eval_csv} ({len(evals_df)} rows)")
+        export_all_figures(evals_df, cfg, run_id)
+        return
+
+    if not figures:
+        return
+
+    from src.visualisation.export import export_dataset_figures
+
+    saved_all = []
+
+    for dataset_cfg in cfg.datasets:
+        if dataset_cfg.name not in narratives_df["dataset"].values:
+            continue
+        df = load_dataset(dataset_cfg)
+        shap_prefix = dataset_cfg.shap_col_prefix
+        shap_cols = [c for c in df.columns if c.startswith(shap_prefix)]
+        feature_cols = [
+            c for c in df.columns
+            if not c.startswith(shap_prefix) and c not in ("label", "pred_proba", "pred_label")
+        ]
+        saved = export_dataset_figures(
+            df, dataset_cfg.name, shap_cols, feature_cols, cfg, shap_prefix=shap_prefix
+        )
+        saved_all.extend(saved)
+
+    print(f"\n{len(saved_all)} dataset figures saved under {cfg.visualisation.figure_dir}datasets/")
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Export a run's narratives and evaluations from SQLite to CSV.",
+        description="Inspect a generation run from narratives.csv; optionally export figures.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--run-id", required=True, help="The run_id to export.")
+    parser.add_argument("--run-id", required=True, help="The run_id to inspect.")
     parser.add_argument("--config", default="config/default.yaml", help="Config file path.")
     parser.add_argument(
         "--figures",
         action="store_true",
-        help="Also produce and save all visualisation figures.",
+        help="Produce dataset-level visualisation figures (no evaluation required).",
+    )
+    parser.add_argument(
+        "--eval-figures",
+        action="store_true",
+        help="Produce hallucination rate figures from a completed evaluation run.",
     )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    export_run(run_id=args.run_id, cfg_path=args.config, figures=args.figures)
+    export_run(
+        run_id=args.run_id,
+        cfg_path=args.config,
+        figures=args.figures,
+        eval_figures=args.eval_figures,
+    )
 
 
 if __name__ == "__main__":
