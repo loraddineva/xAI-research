@@ -39,8 +39,9 @@ Thumbs.db
 .claude/
 CLAUDE.md
 
-# Literature
-papers-zotero/
+# Literature — track only curated PDFs; ignore Zotero internals
+papers-zotero/*
+!papers-zotero/Faithfulness in LLMs/
+papers-zotero/Faithfulness in LLMs/*
+!papers-zotero/Faithfulness in LLMs/*.pdf
 
-# Paper drafts
-paper/
