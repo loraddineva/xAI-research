@@ -66,25 +66,25 @@ Section 2 reviews related work on hallucination, XAI faithfulness, and LLM evalu
 
 ### 2.1 Hallucination in large language models
 
-- Define hallucination as output inconsistent with a verifiable grounding source; distinguish factual hallucination (world-knowledge errors) from faithfulness hallucination (inconsistency with a supplied input).
-- Key references: Maynez et al. (2020) on abstractive summarisation; Ji et al. (2023) survey; Huang et al. (2023) on mitigation.
-- **This paper's position:** the SHAP-to-narrative task is a pure faithfulness problem — every directional and rank claim maps directly onto a numeric input value with no world-knowledge component.
-- **Open question for discussion:** whether observed failures reflect systematic LLM bias toward certain feature types or prompt structures, versus random generation noise.
+- Distinguish **factual hallucination** (output inconsistent with world knowledge) from **faithfulness hallucination** (output inconsistent with a provided grounding source); this paper concerns the latter exclusively (Ji et al., 2023; Maynez et al., 2020).
+- Agarwal, Tanneru & Lakkaraju (2024): LLMs are trained to generate plausible — not faithful — explanations; RLHF rewards coherence to human evaluators, which is functionally equivalent to optimising plausibility; plausible and faithful explanations are not the same thing, and in high-stakes settings the divergence carries real consequences.
+- Turpin et al. (2023): CoT explanations from LLMs can be systematically unfaithful — models produce reasoning that is logically coherent but does not reflect their actual decision process; the explanation rationalises the answer rather than causing it.
+- **This paper's position:** SHAP-to-narrative is a pure faithfulness problem; every directional and rank claim in the narrative is verifiable against a numeric ground truth, so there is no world-knowledge component and no ambiguity about what a faithful output would say.
 
-### 2.2 Explainable AI, SHAP, and LLM-generated narratives
+### 2.2 Narrative XAI: from SHAP values to prose
 
-- SHAP (Lundberg & Lee, 2017): dominant post-hoc attribution method for tabular models; game-theoretic grounding.
-- Human-interpretability gap: raw SHAP outputs are difficult for non-experts; natural-language summaries are increasingly used to bridge it (cite XAI + NLG work).
-- OpenXAI benchmark (Agarwal et al., 2022): standardised datasets, pretrained models, and SHAP values — used as the data source here.
-- Existing work on LLM-generated explanations for tabular predictions assesses quality via human ratings or downstream metrics, not against ground-truth attribution values.
-- **Gap:** no prior study operationalises faithfulness as agreement between stated directional and rank claims and SHAP values; no multi-model empirical study of this kind exists.
+- SHAP (Lundberg & Lee, 2017): dominant post-hoc attribution method for tabular predictions; game-theoretic grounding; widely used in credit, healthcare, and audit contexts.
+- Raw SHAP outputs are dense and technically opaque for non-expert users; natural-language narratives are increasingly used as a communication layer (cite XAI + NLG work).
+- Martens et al. (2024): introduced XAIstories — LLM-generated narratives grounded in SHAP values or counterfactuals; over 90% of surveyed users found SHAPstories convincing; users with narratives answered comprehension questions about model predictions significantly more accurately than users with SHAP tables alone; **faithfulness of narratives to SHAP values was not measured**.
+- Ichmoukamedov, Hinns & Martens (2024): proposed automated metrics for XAI narrative evaluation; a generation LLM produces a narrative from a SHAP table; a separate extraction LLM then parses the narrative into structured claims (rank, sign, value per feature); those claims are checked against the SHAP input to produce faithfulness scores; manual error analysis on a subsample reveals hallucination cases but rates are not reported systematically; **no failure taxonomy, no multi-model or multi-strategy comparison**.
+- **Gap:** no prior study defines a taxonomy of faithfulness failure types for SHAP narratives, reports hallucination rates at scale, or compares models and prompt strategies as experimental variables.
 
-### 2.3 Automated faithfulness evaluation and prompt strategies
+### 2.3 Measuring faithfulness in LLM explanations
 
-- Evaluation approaches: NLI-based entailment, reference-based metrics (ROUGE, BERTScore), LLM-as-judge; entailment methods perform poorly on numerical claims (cite).
-- Rule-based detection offers transparency and replicability for structured verification tasks where ground truth is numeric.
-- Direct instruction and chain-of-thought prompting (Wei et al., 2022); CoT improves reasoning on structured tasks but may surface more intermediate errors before the final narrative.
-- **This paper's approach:** an LLM extraction model parses implied feature claims from each narrative; deterministic comparison to SHAP operationalises four faithfulness failure types.
+- AlMarri et al. (2025): evaluated four open-source LLMs as zero-shot classifiers on financial tabular data; computed SHAP values for the LLMs' own predictions and compared them to the LLMs' self-reported feature impacts; sign agreement between self-explanation and SHAP was only 50–60% even for the most important features; Kendall's τ alignment with LightGBM SHAP was near zero; **key distinction:** the LLM is the model being explained, and the ground-truth SHAP values are computed over the LLM's own decisions — this paper instead studies LLM narration of pre-computed SHAP values from a separate, classical model.
+- Matton et al. (2025, ICLR): defined causal concept faithfulness as the alignment between the concepts an LLM explanation implies are influential and those that causally affect model answers (measured via counterfactual inputs and a Bayesian hierarchical model); found that GPT-3.5 explanations systematically over-cite behaviour-related concepts and omit identity-related ones regardless of their causal relevance; **key distinction:** applied to LLM self-explanation of question-answering, not tabular SHAP narrative.
+- Both AlMarri et al. and Matton et al. study explanations of LLM reasoning; this paper studies whether LLMs faithfully relay a numeric grounding source they did not produce.
+- Chain-of-thought prompting (Wei et al., 2022) improves structured reasoning on multi-step tasks; Turpin et al. (2023) show it can simultaneously surface unfaithful intermediate steps; whether CoT reduces or concentrates faithfulness failures in SHAP narratives is an open empirical question — tested here as a treatment variable, not assumed to be beneficial.
 
 ---
 
@@ -278,14 +278,20 @@ on a 10% subsample before running on the full corpus (~600 narratives). Implemen
 
 *(Use author–year format throughout; build list as writing proceeds.)*
 
-- Agarwal, C., et al. (2022). OpenXAI: Towards a Transparent Evaluation of Model Explanations. *NeurIPS*.
+- Agarwal, C., Krishna, S., Saxena, E., Pawelczyk, M., Johnson, N., Puri, I., Zitnik, M., & Lakkaraju, H. (2022). OpenXAI: Towards a Transparent Evaluation of Model Explanations. *NeurIPS*.
+- Agarwal, C., Tanneru, S. H., & Lakkaraju, H. (2024). Faithfulness vs. Plausibility: On the (Un)Reliability of Explanations from Large Language Models. *arXiv:2402.04614*.
+- AlMarri, S., Ravaut, M., Juhasz, K., Marti, G., Al Ahbabi, H., & Elfadel, I. (2025). Measuring What LLMs Think They Do: SHAP Faithfulness and Deployability on Financial Tabular Classification. *AAAI 2026*. arXiv:2512.00163.
 - Brown, T., et al. (2020). Language Models are Few-Shot Learners. *NeurIPS*.
 - Huang, L., et al. (2023). A Survey on Hallucination in Large Language Models: Principles, Taxonomy, Challenges, and Open Questions. *arXiv:2311.05232*.
+- Ichmoukamedov, T., Hinns, J., & Martens, D. (2024). How good is my story? Towards quantitative metrics for evaluating LLM-generated XAI narratives. *arXiv:2412.10220*.
 - Ji, Z., et al. (2023). Survey of Hallucination in Natural Language Generation. *ACM Computing Surveys*, 55(12).
+- Kuhn, L., Gal, Y., & Farquhar, S. (2023). Semantic uncertainty: Linguistic invariances for uncertainty quantification in language models. *ICLR*. arXiv:2302.09664.
 - Lundberg, S. M., & Lee, S.-I. (2017). A Unified Approach to Interpreting Model Predictions. *NeurIPS*.
+- Martens, D., Hinns, J., Dams, C., Vergouwen, M., & Evgeniou, T. (2024). Tell Me a Story! Narrative-Driven XAI with Large Language Models. *arXiv:2309.17057*.
+- Matton, K., Ness, R. O., Guttag, J., & Kiciman, E. (2025). Walk the Talk? Measuring the Faithfulness of Large Language Model Explanations. *ICLR 2025*. arXiv:2504.14150.
 - Maynez, J., et al. (2020). On Faithfulness and Factuality in Abstractive Summarization. *ACL*.
+- Turpin, M., Michael, J., Perez, E., & Bowman, S. (2023). Language models don't always say what they think: Unfaithful explanations in chain-of-thought prompting. *NeurIPS*, 36, 74952–74965.
 - Wei, J., et al. (2022). Chain-of-Thought Prompting Elicits Reasoning in Large Language Models. *NeurIPS*.
 - Wei, J., Wang, X., Schuurmans, D., et al. (2023). Self-consistency improves chain of thought reasoning in language models. *ICLR*. arXiv:2201.11903.
-- Kuhn, L., Gal, Y., & Farquhar, S. (2023). Semantic uncertainty: Linguistic invariances for uncertainty quantification in language models. *ICLR*. arXiv:2302.09664.
 
 *(Add further references as the literature review is written.)*
