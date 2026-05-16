@@ -62,6 +62,7 @@ class LLMClient:
         prompt: str,
         model_cfg: ModelConfig,
         max_tokens: int | None = None,
+        temperature: float | None = None,
     ) -> str:
         """
         Generate a completion for *prompt* using the model specified in *model_cfg*.
@@ -70,6 +71,7 @@ class LLMClient:
             prompt:     The full prompt string (system + user content merged).
             model_cfg:  A ModelConfig instance from AppConfig.models.
             max_tokens: Optional override for ``model_cfg.max_tokens`` (e.g. CoT runs).
+            temperature: Optional override for ``model_cfg.temperature`` (e.g. robustness runs).
 
         Returns:
             The model's response as a plain string (stripped of leading/trailing
@@ -80,6 +82,7 @@ class LLMClient:
             Exception:   Provider API errors after all retries exhausted.
         """
         tokens = max_tokens if max_tokens is not None else model_cfg.max_tokens
+        temp = temperature if temperature is not None else model_cfg.temperature
         provider = model_cfg.provider.lower()
         dispatch = {
             "anthropic": self._generate_anthropic,
@@ -92,14 +95,14 @@ class LLMClient:
                 f"Unknown provider '{provider}'. "
                 f"Valid options: {list(dispatch.keys())}"
             )
-        return dispatch[provider](prompt, model_cfg, tokens)
+        return dispatch[provider](prompt, model_cfg, tokens, temp)
 
     # ------------------------------------------------------------------
     # Anthropic
     # ------------------------------------------------------------------
 
     def _generate_anthropic(
-        self, prompt: str, model_cfg: ModelConfig, max_tokens: int
+        self, prompt: str, model_cfg: ModelConfig, max_tokens: int, temperature: float
     ) -> str:
         try:
             import anthropic as _anthropic
@@ -113,7 +116,7 @@ class LLMClient:
             message = client.messages.create(
                 model=model_cfg.model_name,
                 max_tokens=max_tokens,
-                temperature=model_cfg.temperature,
+                temperature=temperature,
                 messages=[{"role": "user", "content": prompt}],
             )
             return message.content[0].text.strip()
@@ -125,7 +128,7 @@ class LLMClient:
     # ------------------------------------------------------------------
 
     def _generate_together(
-        self, prompt: str, model_cfg: ModelConfig, max_tokens: int
+        self, prompt: str, model_cfg: ModelConfig, max_tokens: int, temperature: float
     ) -> str:
         try:
             from together import Together as _Together
@@ -139,7 +142,7 @@ class LLMClient:
             response = client.chat.completions.create(
                 model=model_cfg.model_name,
                 max_tokens=max_tokens,
-                temperature=model_cfg.temperature,
+                temperature=temperature,
                 messages=[{"role": "user", "content": prompt}],
             )
             return response.choices[0].message.content.strip()
@@ -151,7 +154,7 @@ class LLMClient:
     # ------------------------------------------------------------------
 
     def _generate_mistral(
-        self, prompt: str, model_cfg: ModelConfig, max_tokens: int
+        self, prompt: str, model_cfg: ModelConfig, max_tokens: int, temperature: float
     ) -> str:
         try:
             from mistralai.client import Mistral as _Mistral
@@ -165,7 +168,7 @@ class LLMClient:
             response = client.chat.complete(
                 model=model_cfg.model_name,
                 max_tokens=max_tokens,
-                temperature=model_cfg.temperature,
+                temperature=temperature,
                 messages=[{"role": "user", "content": prompt}],
             )
             return response.choices[0].message.content.strip()
@@ -177,7 +180,7 @@ class LLMClient:
     # ------------------------------------------------------------------
 
     def _generate_ollama(
-        self, prompt: str, model_cfg: ModelConfig, max_tokens: int
+        self, prompt: str, model_cfg: ModelConfig, max_tokens: int, temperature: float
     ) -> str:
         """
         Calls the local Ollama REST API.
@@ -194,7 +197,7 @@ class LLMClient:
             "messages": [{"role": "user", "content": prompt}],
             "stream": False,
             "options": {
-                "temperature": model_cfg.temperature,
+                "temperature": temperature,
                 "num_predict": max_tokens,
             },
         }).encode("utf-8")

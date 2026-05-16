@@ -37,6 +37,8 @@ OpenXAI includes eight datasets: three real-world tabular datasets and five synt
 
 **Important:** Synthetic datasets (Syn1–Syn5) have analytically-derived **ground-truth explanations**, enabling computation of the full set of faithfulness metrics (FA, RA, SA, SRA, PRA). Real-world datasets (Adult, German, COMPAS) do **not** have ground-truth explanations; only ground-truth-free metrics (PGI, PGU, RIS, RRS, ROS) can be computed for them.
 
+**This project** uses Adult Income only. German Credit data and preparation scripts are archived under `archive/german_credit/` and are not loaded by the active pipeline.
+
 ---
 
 ## Adult Income in OpenXAI

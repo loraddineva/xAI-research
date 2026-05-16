@@ -1,6 +1,6 @@
 run_id: test_run_eval
 generation_run_id: test_run_eval
-created_at: '2026-05-16T07:43:27.025272+00:00'
+created_at: '2026-05-16T08:50:34.250103+00:00'
 config:
   run:
     name: pilot_run
@@ -14,14 +14,6 @@ config:
       on demographic and employment data
     positive_class_label: income above $50,000
     negative_class_label: income at or below $50,000
-  - name: german_credit
-    path: data/processed/german_credit.csv
-    shap_col_prefix: shap_
-    n_instances: 100
-    task_description: predict whether a loan applicant is a good credit risk, based
-      on financial and personal data
-    positive_class_label: good credit risk
-    negative_class_label: bad credit risk
   models:
   - id: claude-opus
     provider: anthropic
@@ -60,6 +52,13 @@ config:
     template: config/prompts/extract.j2
     top_k_features: 3
     export_dir: outputs/evaluations/
+    robustness:
+      n_runs: 5
+      temperature: 0.9
+      min_successful_runs: 3
+      reliability_threshold: 0.8
+      subsample_fraction: 1.0
+      max_workers: 5
 extraction_model_id: claude-opus
 n_records: 1
 n_failed: 0

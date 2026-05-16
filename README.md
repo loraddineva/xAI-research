@@ -17,13 +17,16 @@ to write a human-readable explanation, does the LLM faithfully report what the n
 
 To answer this, the pipeline:
 
-1. Takes two tabular datasets from the [OpenXAI benchmark](https://github.com/AI4LIFE-GROUP/OpenXAI)
-  (Adult Income and German Credit), each paired with a pretrained ML model (logistic regression),
-   per-instance SHAP values, and the model's own predicted probability and class label.
-2. Generates ~1,200 natural-language narratives by crossing three LLMs × two prompt strategies
-   (Martens direct, chain-of-thought) × two datasets × 100 instances per dataset.
-3. Stores every narrative in a per-run CSV (`outputs/generation/<run_id>/narratives.csv`) for
-   downstream faithfulness evaluation (evaluator to be implemented separately).
+1. Takes the Adult Income dataset from the [OpenXAI benchmark](https://github.com/AI4LIFE-GROUP/OpenXAI),
+   paired with a pretrained ML model (logistic regression), per-instance SHAP values, and the
+   model's own predicted probability and class label.
+2. Generates ~600 natural-language narratives by crossing three LLMs × two prompt strategies
+   (Martens direct, chain-of-thought) × 100 instances.
+3. Evaluates each narrative with an LLM extraction model and compares structured claims to
+   ground-truth SHAP values (four-type hallucination taxonomy).
+4. Optionally runs a **robustness check**: five high-temperature extractions per narrative to
+   measure extraction-model agreement and flag low-reliability cases before interpreting
+   hallucination flags.
 
 ---
 
@@ -46,11 +49,11 @@ To answer this, the pipeline:
 
 | Dimension             | Values                                                                                          |
 | --------------------- | ----------------------------------------------------------------------------------------------- |
-| Datasets              | Adult Income, German Credit (OpenXAI benchmark)                                                 |
+| Dataset               | Adult Income (OpenXAI benchmark); German Credit archived under `archive/german_credit/`        |
 | Models                | Claude Opus, Llama 3 70B (via Together AI), Mistral Small (via Mistral AI)                      |
 | Prompt strategies     | `martens` (Martens et al. 2024 direct narrative), `chain_of_thought` (rank/sign steps + `Narrative:` section) |
 | Instances per dataset | 100                                                                                             |
-| Total narratives      | ~1,200                                                                                          |
+| Total narratives      | ~600                                                                                            |
 
 
 **Martens (`narrative.j2`):** follows Martens et al. (2024), *Tell Me a Story! Narrative-Driven XAI
@@ -79,18 +82,26 @@ xai-hallucination/
 │   └── processed/                    # CSVs with feature + shap_<feature> + pred_proba/pred_label
 ├── outputs/
 │   ├── generation/<run_id>/          # Per-run: narratives.csv, narratives.jsonl, run_metadata.yaml
+│   ├── evaluations/<run_id>/         # evaluations.csv, robustness.jsonl, eval_metadata.yaml
 │   └── figures/                      # Plots — datasets/ subfolder for exploratory figures
 ├── src/
 │   ├── config.py                     # Pydantic AppConfig — parses default.yaml
 │   ├── data_loader.py                # Loads CSVs; formats SHAP tables for prompts
-│   ├── storage/
-│   │   └── narratives_store.py       # List/load runs from narratives.csv on disk
 │   ├── generation/                   # Generation subpackage
 │   │   ├── llm_client.py             # Unified LLM client (Anthropic/Together/Mistral/Ollama)
 │   │   ├── prompt_renderer.py        # Jinja2 renderer per prompt strategy
 │   │   ├── narrative_text.py         # Strips CoT reasoning before evaluation
 │   │   ├── generator.py              # Orchestrates dataset × strategy × model × instance loop
 │   │   └── exporters.py              # CSV + JSONL writers
+│   ├── evaluation/                   # Extraction, SHAP comparison, robustness
+│   │   ├── evaluator.py              # Main evaluation loop (temp 0.0 extraction)
+│   │   ├── compare_to_shap.py        # Four-type hallucination flags
+│   │   ├── extraction_parser.py      # Parse extraction JSON
+│   │   ├── robustness.py             # Per-field agreement scoring
+│   │   └── robustness_runner.py      # Multi-sample extraction (temp 0.9)
+│   ├── storage/
+│   │   ├── narratives_store.py
+│   │   └── evaluations_store.py
 │   └── visualisation/
 │       ├── dataset_overview.py       # Feature distributions, class balance, correlation heatmap
 │       ├── shap_distributions.py     # SHAP importance bar, beeswarm, scatter plots
@@ -104,9 +115,13 @@ xai-hallucination/
 ├── scripts/
 │   ├── prepare_data.py               # Download OpenXAI data, compute predictions + SHAP, save CSVs
 │   ├── run_generation.py             # CLI: generate narratives for a run
-│   └── export_results.py             # CLI: inspect run CSV (+ optional dataset figures)
+│   ├── run_evaluation.py             # CLI: LLM extraction + SHAP comparison
+│   ├── run_robustness.py             # CLI: multi-sample extraction agreement check
+│   └── export_results.py             # CLI: inspect run CSV (+ optional figures)
 ├── tests/
-│   └── test_llm_client.py            # Mocked provider API tests (no real API calls)
+│   ├── test_llm_client.py            # Mocked provider API tests (no real API calls)
+│   ├── test_evaluator.py             # Parser, compare_to_shap, mocked evaluation
+│   └── test_robustness.py            # Agreement scoring and mocked robustness run
 ├── .env.example
 └── requirements.txt
 ```
@@ -153,12 +168,11 @@ Before running the generation pipeline, processed CSVs must exist in `data/proce
 The `prepare_data.py` script handles this end-to-end.
 
 ```bash
-# Prepare both datasets (default — recommended for a full run)
+# Prepare Adult Income (default)
 python scripts/prepare_data.py
 
-# One dataset only
+# Explicit dataset flag (Adult only)
 python scripts/prepare_data.py --dataset adult
-python scripts/prepare_data.py --dataset german_credit
 
 # Use the neural-network model instead of logistic regression
 python scripts/prepare_data.py --model ann
@@ -173,13 +187,11 @@ python scripts/prepare_data.py --n 20 --validate
 2. Loads the corresponding pretrained model from OpenXAI (`lr` by default).
 3. Computes the model's predicted probability of class 1 and predicted class label per instance.
 4. Runs the OpenXAI SHAP explainer over each instance.
-5. Applies dataset-specific post-processing:
-   - **Adult Income** — drops `fnlwgt` (the uninformative survey weight column) and its SHAP twin.
-   - **German Credit** — aggregates the 52 one-hot encoded dummy columns
-     (`status_*`, `credit-history_*`, `purpose_*`, ...) back into 12 parent categorical
-     features by summing dummy SHAPs and recording the active dummy's index as the
-     feature value, yielding the original 20-feature schema.
-6. Saves a CSV to `data/processed/`.
+5. Applies Adult-specific post-processing: drops `fnlwgt` (the uninformative survey
+   weight column) and its SHAP twin, and substitutes raw feature values from the cached CSV.
+6. Saves a CSV to `data/processed/adult.csv`.
+
+German Credit preparation logic is archived under `archive/german_credit/`.
 
 **Output CSV layout:**
 
@@ -247,7 +259,80 @@ python scripts/export_results.py --run-id <run_id> --figures
 
 Dataset figures are saved to `outputs/figures/datasets/<dataset_name>/`.
 
-### Step 3 — Visualise (notebooks)
+### Step 3 — Evaluate narratives
+
+```bash
+# Faithfulness evaluation (extraction at temperature 0.0)
+python scripts/run_evaluation.py --run-id <run_id>
+
+# Dry-run: print extraction prompts only
+python scripts/run_evaluation.py --run-id <run_id> --dry-run
+
+# First N narratives only
+python scripts/run_evaluation.py --run-id <run_id> --n 10
+```
+
+Outputs under `outputs/evaluations/<run_id>/`:
+
+| File | Role |
+| ---- | ---- |
+| `evaluations.csv` | One row per narrative with hallucination flags |
+| `evaluations.jsonl` | Same records as JSON (nested `notes`, `extraction_json`) |
+| `eval_metadata.yaml` | Config snapshot and run summary |
+
+### Step 4 — Extraction robustness (optional)
+
+Runs the extraction model **five times** at high temperature (`0.9`) on the same narrative
+and scores agreement on `sign`, `rank`, and `value` per feature. Inspired by semantic-uncertainty
+work (Kuhn et al., 2023); sampling follows self-consistency (Wei et al., 2023).
+
+```bash
+# Calibrate on 10% subsample first (recommended)
+python scripts/run_robustness.py --run-id <run_id> --subsample 0.1
+
+# Full run (5× API calls per narrative — run after evaluation)
+python scripts/run_robustness.py --run-id <run_id>
+
+# Smoke test
+python scripts/run_robustness.py --run-id <run_id> --n 3 --dry-run
+```
+
+Writes `robustness.jsonl` and merges a `robustness` block into `evaluations.jsonl` when
+evaluation has already been run. Each record includes:
+
+```json
+"robustness": {
+  "n_successful_runs": 5,
+  "per_feature": {
+    "age": {"sign_agreement": 1.0, "rank_agreement": 0.8, "value_agreement": 1.0}
+  },
+  "narrative_reliability_score": 0.85,
+  "flagged_low_reliability": false,
+  "extraction_unreliable": false
+}
+```
+
+Narratives with fewer than three successful parses are marked `extraction_unreliable`.
+Scores below `0.8` (configurable) are `flagged_low_reliability`. Report hallucination rates
+separately for high- and low-reliability extractions:
+
+```python
+from src.storage.evaluations_store import load_evaluations_csv, eval_run_dir
+from src.evaluation.robustness_runner import reliability_summary
+
+evals_df = load_evaluations_csv(eval_run_dir(cfg.evaluation.export_dir, run_id) / "evaluations.csv")
+print(reliability_summary(evals_df))
+```
+
+Tune settings under `evaluation.robustness` in `config/default.yaml`.
+
+### Step 5 — Evaluation figures and notebooks
+
+```bash
+python scripts/export_results.py --run-id <run_id> --eval-figures
+```
+
+### Step 6 — Visualise (notebooks)
 
 - `notebooks/02_narrative_inspection.ipynb` — browse narratives from `narratives.csv`
 - `notebooks/01_data_exploration.ipynb` — feature distributions and SHAP plots
@@ -625,10 +710,11 @@ all retries) are caught and logged without aborting the run. No silent data loss
 | Phase | Description                                                                                 | Status                  |
 | ----- | ------------------------------------------------------------------------------------------- | ----------------------- |
 | 1     | Foundation — config, data loader, CSV storage                                               | Complete                |
-| 1b    | Data prep refresh — drop `fnlwgt`, add `pred_proba` / `pred_label`, aggregate German one-hot | Complete                |
+| 1b    | Data prep refresh — drop `fnlwgt`, add `pred_proba` / `pred_label`; German Credit archived   | Complete                |
 | 2     | Generation — LLM client, Jinja2 renderer, martens + chain-of-thought prompts, CLI              | Complete                |
 | 2b    | Output formats — canonical `narratives.csv`, JSONL stream, `run_metadata.yaml`              | Complete                |
-| 3     | Evaluation — faithfulness metrics (deferred; rule-based detector removed)                  | Deferred                |
+| 3     | Evaluation — LLM extraction + four-type SHAP comparison                                       | Complete                |
+| 3b    | Robustness — multi-sample extraction agreement (optional calibration subsample)            | Complete                |
 | 4     | Visualisation — dataset overview, SHAP distributions; hallucination charts when eval exists | Partial                 |
 | 5     | Export + tests                                                                              | Complete                |
 

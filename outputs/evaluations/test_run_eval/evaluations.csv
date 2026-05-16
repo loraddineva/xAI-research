@@ -1,5 +1,5 @@
 eval_id,narrative_id,run_id,dataset,instance_id,model_id,prompt_strategy,sign_inversion,rank_swap,feature_fabrication,omission,any_hallucination,notes,extraction_json,unknown_features,extraction_model_id,extraction_provider,extraction_model_name,extraction_prompt,extraction_raw_response,parse_error,evaluated_at
-5eb44597-da52-4268-af1c-4cad53d2b032,n1,test_run_eval,adult,0,claude-opus,martens,0,0,0,1,1,"{""omission"": ""Top-3 SHAP features not mentioned: ['education', 'hours_per_week']""}","{""features"": {""age"": {""exists"": true, ""rank"": 0, ""sign"": 1, ""value"": null, ""assumption"": ""Older applicants have higher income.""}}, ""unknown_features"": []}",[],claude-opus,anthropic,claude-opus-4-6,"You are an information extraction assistant. Your task is to read a natural-language narrative that explains a machine-learning model prediction, and extract structured claims about which dataset features the narrative discusses.
+05fe2baa-c3c8-4318-ad31-e473e6bada90,n1,test_run_eval,adult,0,claude-opus,martens,0,0,0,1,1,"{""omission"": ""Top-3 SHAP features not mentioned: ['education', 'hours_per_week']""}","{""features"": {""age"": {""exists"": true, ""rank"": 0, ""sign"": 1, ""value"": null, ""assumption"": ""Older applicants have higher income.""}}, ""unknown_features"": []}",[],claude-opus,anthropic,claude-opus-4-6,"You are an information extraction assistant. Your task is to read a natural-language narrative that explains a machine-learning model prediction, and extract structured claims about which dataset features the narrative discusses.
 
 ## Dataset and task
 
@@ -45,4 +45,4 @@ Return **only** valid JSON with this structure (no markdown fences, no commentar
   },
   ""unknown_features"": []
 }
-","{""features"": {""age"": {""exists"": true, ""rank"": 0, ""sign"": 1, ""value"": null, ""assumption"": ""Older applicants have higher income.""}}, ""unknown_features"": []}",,2026-05-16T07:43:27.022638+00:00
+","{""features"": {""age"": {""exists"": true, ""rank"": 0, ""sign"": 1, ""value"": null, ""assumption"": ""Older applicants have higher income.""}}, ""unknown_features"": []}",,2026-05-16T08:50:34.246119+00:00

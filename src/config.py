@@ -92,6 +92,17 @@ class VisualisationConfig(BaseModel):
     dpi: int = 150
 
 
+class RobustnessConfig(BaseModel):
+    """Multi-sample extraction agreement (semantic uncertainty check)."""
+
+    n_runs: int = 5
+    temperature: float = 0.9
+    min_successful_runs: int = 3
+    reliability_threshold: float = 0.8
+    subsample_fraction: float = 1.0
+    max_workers: int = 5
+
+
 class EvaluationConfig(BaseModel):
     """LLM extraction + SHAP comparison evaluation settings."""
 
@@ -99,6 +110,7 @@ class EvaluationConfig(BaseModel):
     template: str = "config/prompts/extract.j2"
     top_k_features: int = 3
     export_dir: str = "outputs/evaluations/"
+    robustness: RobustnessConfig = Field(default_factory=RobustnessConfig)
 
 
 # ---------------------------------------------------------------------------
