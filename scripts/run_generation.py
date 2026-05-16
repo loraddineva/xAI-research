@@ -10,7 +10,7 @@ Usage
     # Custom config file
     python scripts/run_generation.py --config config/my_config.yaml
 
-    # Dry-run: print prompts, no LLM calls or DB writes
+    # Dry-run: print prompts, no LLM calls or disk writes
     python scripts/run_generation.py --dry-run
 
     # Scoped run: one model, one dataset, 5 instances
@@ -27,13 +27,12 @@ import sys
 from pathlib import Path
 from dotenv import load_dotenv
 
-# Allow running as `python scripts/run_generation.py` from the project root
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 load_dotenv()
 
 from src.config import load_config
-from src.narrative_generator import run_generation
+from src.generation import run_generation
 
 
 def parse_args() -> argparse.Namespace:
@@ -49,7 +48,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Print prompts to stdout; skip all LLM calls and DB writes.",
+        help="Print prompts to stdout; skip all LLM calls and disk writes.",
     )
     parser.add_argument(
         "--model",

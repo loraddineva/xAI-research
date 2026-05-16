@@ -18,12 +18,12 @@ to write a human-readable explanation, does the LLM faithfully report what the n
 To answer this, the pipeline:
 
 1. Takes two tabular datasets from the [OpenXAI benchmark](https://github.com/AI4LIFE-GROUP/OpenXAI)
-  (Adult Income and German Credit), each paired with a pretrained ML model (logistic regression)
-   and per-instance SHAP values.
-2. Generates approximately 3,600 natural-language narratives by crossing three LLMs × three prompt
-  strategies × two datasets × 100 instances per dataset.
+  (Adult Income and German Credit), each paired with a pretrained ML model (logistic regression),
+   per-instance SHAP values, and the model's own predicted probability and class label.
+2. Generates ~600 natural-language narratives by crossing three LLMs × two datasets × 100 instances
+   per dataset, using a single Martens-style narrative prompt repurposed for each dataset.
 3. Automatically evaluates each narrative against its ground-truth SHAP values using five
-  hallucination types.
+  hallucination types (evaluation pipeline pending refactor to consume the new generation outputs).
 
 ---
 
@@ -44,13 +44,20 @@ To answer this, the pipeline:
 ## Experimental design
 
 
-| Dimension             | Values                                                                       |
-| --------------------- | ---------------------------------------------------------------------------- |
-| Datasets              | Adult Income, German Credit (OpenXAI benchmark)                              |
-| Models                | Claude Sonnet, Llama 3 70B (via Together AI), Mistral Small (via Mistral AI) |
-| Prompt strategies     | Zero-shot, few-shot, chain-of-thought                                        |
-| Instances per dataset | 100                                                                          |
-| Total narratives      | ~1, 800                                                                      |
+| Dimension             | Values                                                                                          |
+| --------------------- | ----------------------------------------------------------------------------------------------- |
+| Datasets              | Adult Income, German Credit (OpenXAI benchmark)                                                 |
+| Models                | Claude Opus, Llama 3 70B (via Together AI), Mistral Small (via Mistral AI)                      |
+| Prompt                | Single Martens-style narrative prompt (repurposed per dataset via task description + class labels) |
+| Instances per dataset | 100                                                                                             |
+| Total narratives      | ~600                                                                                            |
+
+
+The prompt follows Martens et al. (2024), *Tell Me a Story! Narrative-Driven XAI with Large
+Language Models*. It introduces the prediction task in plain language, states the model's
+predicted probability and class, presents the SHAP table sorted from most positive to most
+negative, and asks the model for a fluent story focused on the most influential positive
+and negative features.
 
 
 ---
@@ -62,24 +69,26 @@ xai-hallucination/
 ├── config/
 │   ├── default.yaml                  # Master config — change values here, not in code
 │   └── prompts/
-│       ├── zero_shot.txt             # Zero-shot prompt template (Jinja2)
-│       ├── few_shot.txt              # Two-example few-shot template (Jinja2)
-│       └── chain_of_thought.txt      # Step-by-step CoT template (Jinja2)
+│       └── narrative.j2              # Single Martens-style narrative prompt (Jinja2)
 ├── data/
 │   ├── raw/                          # OpenXAI datasets as downloaded (auto-created)
-│   └── processed/                    # CSVs with feature + shap_<feature> columns
+│   └── processed/                    # CSVs with feature + shap_<feature> + pred_proba/pred_label
 ├── outputs/
-│   ├── narratives/                   # JSONL file per run: prompt + narrative text
+│   ├── generation/<run_id>/          # Per-run folder: narratives.jsonl, run.json, narratives.xlsx
 │   ├── evaluations/                  # CSV exports of hallucination labels per run
-│   └── figures/                      # Plots — one subfolder per run or dataset
+│   ├── figures/                      # Plots — one subfolder per run or dataset
+│   └── results.db                    # SQLite store (runs, narratives, evaluations)
 ├── src/
 │   ├── config.py                     # Pydantic AppConfig — parses default.yaml
 │   ├── data_loader.py                # Loads CSVs; formats SHAP tables for prompts
 │   ├── db.py                         # SQLite schema + read/write helpers
-│   ├── llm_client.py                 # Unified LLM client (Anthropic/Together/Mistral/Ollama)
-│   ├── prompt_renderer.py            # Jinja2-based prompt template renderer
-│   ├── narrative_generator.py        # Orchestrates dataset × model × prompt loop
-│   ├── evaluator.py                  # Rule-based hallucination detector + optional LLM judge
+│   ├── generation/                   # Generation subpackage (independent of evaluation)
+│   │   ├── llm_client.py             # Unified LLM client (Anthropic/Together/Mistral/Ollama)
+│   │   ├── prompt_renderer.py        # Jinja2 renderer for the single narrative prompt
+│   │   ├── generator.py              # Orchestrates dataset × model × instance loop
+│   │   └── exporters.py              # JSONL / consolidated JSON / XLSX writers
+│   ├── evaluation/                   # Evaluation subpackage (will be revised separately)
+│   │   └── evaluator.py              # Rule-based hallucination detector + optional LLM judge
 │   └── visualisation/
 │       ├── dataset_overview.py       # Feature distributions, class balance, correlation heatmap
 │       ├── shap_distributions.py     # SHAP importance bar, beeswarm, scatter plots
@@ -91,7 +100,7 @@ xai-hallucination/
 │   ├── 02_narrative_inspection.ipynb # Browse generated narratives alongside SHAP values
 │   └── 03_results_visualisation.ipynb# Load evaluation results and produce all paper figures
 ├── scripts/
-│   ├── prepare_data.py               # Download OpenXAI data, compute SHAP values, save CSVs
+│   ├── prepare_data.py               # Download OpenXAI data, compute predictions + SHAP, save CSVs
 │   ├── run_generation.py             # CLI: generate narratives for a run
 │   ├── run_evaluation.py             # CLI: evaluate a completed generation run
 │   └── export_results.py             # CLI: export DB → CSV (+ optional figures)
@@ -162,21 +171,30 @@ python scripts/prepare_data.py --n 20 --validate
 
 1. Downloads the OpenXAI dataset via `ReturnLoaders` (cached to `data/raw/` on first run).
 2. Loads the corresponding pretrained model from OpenXAI (`lr` by default).
-3. Runs OpenXAI's SHAP explainer (`SHAPExplainerC`) over each instance.
-4. Saves a CSV to `data/processed/` with one row per instance, containing both
-  raw feature columns and matching `shap_<feature>` columns.
+3. Computes the model's predicted probability of class 1 and predicted class label per instance.
+4. Runs the OpenXAI SHAP explainer over each instance.
+5. Applies dataset-specific post-processing:
+   - **Adult Income** — drops `fnlwgt` (the uninformative survey weight column) and its SHAP twin.
+   - **German Credit** — aggregates the 52 one-hot encoded dummy columns
+     (`status_*`, `credit-history_*`, `purpose_*`, ...) back into 12 parent categorical
+     features by summing dummy SHAPs and recording the active dummy's index as the
+     feature value, yielding the original 20-feature schema.
+6. Saves a CSV to `data/processed/`.
 
 **Output CSV layout:**
 
 
-| Column type        | Example names                                                |
-| ------------------ | ------------------------------------------------------------ |
-| Raw feature values | `age`, `education_num`, `hours_per_week`, ...                |
-| Ground-truth label | `label`                                                      |
-| SHAP values        | `shap_age`, `shap_education_num`, `shap_hours_per_week`, ... |
+| Column type           | Example names                                                |
+| --------------------- | ------------------------------------------------------------ |
+| Raw feature values    | `age`, `education_num`, `hours_per_week`, ...                |
+| Ground-truth label    | `label`                                                      |
+| Model prediction      | `pred_proba` (P(class=1)), `pred_label` (argmax class)        |
+| SHAP values           | `shap_age`, `shap_education_num`, `shap_hours_per_week`, ... |
 
 
 The `shap_` prefix must match `shap_col_prefix` in `config/default.yaml` (default: `shap_`).
+The `pred_proba` and `pred_label` columns are required by the narrative prompt; if they are
+missing the renderer will raise a `KeyError` asking you to re-run `prepare_data.py`.
 
 SHAP computation on the full Adult Income test split (~9,000 instances) takes several minutes.
 Run this step directly in a terminal, not as a background task.
@@ -188,10 +206,10 @@ Run this step directly in a terminal, not as a background task.
 ### Step 1 — Generate narratives
 
 ```bash
-# Full run (reads all models, datasets, and strategies from config/default.yaml)
+# Full run (reads all models and datasets from config/default.yaml)
 python scripts/run_generation.py
 
-# Dry-run: prints prompts to stdout; makes no API calls and writes nothing to DB
+# Dry-run: prints prompts to stdout; makes no API calls and writes nothing to disk
 python scripts/run_generation.py --dry-run
 
 # Restrict to one model and one dataset, 5 instances (useful for initial testing)
@@ -204,8 +222,18 @@ python scripts/run_generation.py --config config/my_config.yaml
 The script prints the `run_id` (e.g. `pilot_run_20260510T141023_a3f7c2`) on completion.
 Each narrative is written to:
 
-- The `narratives` table in `outputs/results.db`
-- A JSONL file at `outputs/narratives/<run_id>.jsonl` (contains the prompt and response)
+- The `narratives` table in `outputs/results.db` (legacy storage, used by `run_evaluation.py`).
+- `outputs/generation/<run_id>/narratives.jsonl` — one JSON object per line, appended live
+  during the run (crash-safe; survives mid-run failures).
+- `outputs/generation/<run_id>/run.json` — single self-contained file written at the end:
+  full config snapshot at the top, every narrative under `narratives` (including any
+  failed instances with their `error` field populated).
+- `outputs/generation/<run_id>/narratives.xlsx` — flat one-sheet spreadsheet with one
+  row per narrative for manual inspection.
+
+Every record contains the **full rendered prompt** plus a `model` block with provider,
+model name, temperature, and max_tokens — so any narrative can be reproduced or audited
+without consulting the original config file.
 
 **Resume behaviour:** if the script is interrupted, restarting it creates a new run.
 Within a single run, already-generated narratives are detected by checking the DB and
@@ -214,6 +242,10 @@ passing `--resume-run-id <run_id>` (planned CLI addition; currently, restart = n
 
 ### Step 2 — Evaluate
 
+> **Status:** the rule-based evaluator still works against the SQLite store but will
+> be redesigned in a follow-up to consume the new `outputs/generation/<run_id>/`
+> artefacts directly. The CLI below is the legacy entry point.
+
 ```bash
 python scripts/run_evaluation.py --run-id <run_id>
 
@@ -221,10 +253,9 @@ python scripts/run_evaluation.py --run-id <run_id>
 python scripts/run_evaluation.py --run-id <run_id> --llm-judge
 ```
 
-The evaluator applies five rule-based checks to each narrative. For chain-of-thought
-narratives, it automatically strips the reasoning steps and evaluates only the final
-`Narrative:` section — this prevents false positives from reasoning text that is not
-part of the model's stated claim.
+The evaluator applies five rule-based checks to each narrative. With the unified
+narrative prompt there is no chain-of-thought reasoning to strip; the full narrative
+text is evaluated directly.
 
 Results are written to:
 
@@ -268,6 +299,10 @@ datasets:
     path: "data/processed/adult.csv"
     shap_col_prefix: "shap_"   # SHAP columns are named shap_<feature>
     n_instances: 100            # Number of rows to use from this dataset
+    # Per-dataset narrative metadata — injected into the single prompt template:
+    task_description: "predict whether a person's annual income exceeds $50,000, based on demographic and employment data"
+    positive_class_label: "income above $50,000"
+    negative_class_label: "income at or below $50,000"
 
 models:
   - id: "claude-opus"           # Short id used in CLI flags and DB records
@@ -276,12 +311,8 @@ models:
     max_tokens: 512
     temperature: 0.0
 
-prompts:
-  strategies:
-    - zero_shot
-    - few_shot
-    - chain_of_thought
-  template_dir: "config/prompts/"
+prompt:
+  template: "config/prompts/narrative.j2"   # Single Martens-style narrative prompt
 
 evaluation:
   top_k_features: 3             # Features checked for omission and rank swap
@@ -291,8 +322,9 @@ evaluation:
 
 storage:
   db_path: "outputs/results.db"
+  generation_dir: "outputs/generation/"     # Per-run subfolders: jsonl + json + xlsx
   export_dir: "outputs/evaluations/"
-  narrative_dir: "outputs/narratives/"
+  narrative_dir: "outputs/narratives/"      # Legacy alias; new runs use generation_dir
 
 visualisation:
   figure_dir: "outputs/figures/"
@@ -343,7 +375,8 @@ df   = load_dataset(cfg.get_dataset("adult"))
 row  = df.iloc[0]
 
 print(format_shap_table(row, prefix="shap_"))
-# Output (sorted by |SHAP| descending, one feature per line):
+# Output (sorted from most positive to most negative SHAP, one feature per line —
+# matches the order shown to the LLM in the Martens-style prompt):
 #   age: +0.4200 (feature value: 52)
 #   education_num: +0.3100 (feature value: 13)
 #   hours_per_week: +0.1800 (feature value: 45)
@@ -351,6 +384,7 @@ print(format_shap_table(row, prefix="shap_"))
 
 top3 = top_k_shap_features(row, prefix="shap_", k=3)
 # → [("age", 0.42), ("education_num", 0.31), ("hours_per_week", 0.18)]
+# (top_k_shap_features still ranks by |SHAP|; format_shap_table uses signed order)
 
 shap_cols = get_shap_columns(df, prefix="shap_")    # ["shap_age", "shap_education_num", ...]
 feat_cols  = get_feature_columns(df, prefix="shap_") # ["age", "education_num", ...]
@@ -358,20 +392,20 @@ feat_cols  = get_feature_columns(df, prefix="shap_") # ["age", "education_num", 
 
 ---
 
-### `src/prompt_renderer.py`
+### `src/generation/prompt_renderer.py`
 
-Renders prompt templates using Jinja2. Templates live in `config/prompts/` and use
-`{{ dataset }}` and `{{ shap_table }}` as placeholders.
+Renders the single Martens-style narrative prompt using Jinja2. The template path is
+configured via `cfg.prompt.template` (default: `config/prompts/narrative.j2`). Per-dataset
+metadata (`task_description`, `positive_class_label`, `negative_class_label`) plus the
+row's `pred_proba` and `pred_label` columns drive the rendering.
 
 ```python
-from src.prompt_renderer import PromptRenderer
+from src.generation import PromptRenderer
 
 renderer = PromptRenderer(cfg)
 prompt = renderer.render(
-    strategy="zero_shot",
-    dataset_name="adult",
+    dataset_cfg=cfg.get_dataset("adult"),
     row=df.iloc[0],
-    shap_prefix="shap_",
 )
 ```
 
@@ -401,7 +435,7 @@ with db_connection("outputs/results.db") as conn:
     # Write
     insert_run(conn, run_id="abc123", run_name="pilot", config_json={...}, created_at="...")
     insert_narrative(conn, narrative_id="n1", run_id="abc123", dataset="adult",
-                     instance_id=0, model_id="claude-opus", prompt_strategy="zero_shot",
+                     instance_id=0, model_id="claude-opus", prompt_strategy="narrative",
                      narrative_text="...", created_at="...")
     insert_evaluation(conn, eval_id="e1", narrative_id="n1",
                       sign_inversion=False, rank_swap=True, feature_fabrication=False,
@@ -415,16 +449,18 @@ with db_connection("outputs/results.db") as conn:
     all_runs    = list_runs(conn)                          # List[dict], most recent first
 
     # Resume check — True if this combination was already generated
-    exists = narrative_exists(conn, "abc123", "adult", 0, "claude-opus", "zero_shot")
+    exists = narrative_exists(conn, "abc123", "adult", 0, "claude-opus")
 ```
 
 `get_evaluations_for_run` returns rows joined with `narratives`, so each dict includes
 `dataset`, `instance_id`, `model_id`, and `prompt_strategy` alongside the five hallucination
-flags — suitable for loading directly into a pandas DataFrame.
+flags — suitable for loading directly into a pandas DataFrame. The `prompt_strategy`
+column carries the placeholder `"narrative"` for runs produced by the unified prompt;
+the column is retained for backwards compatibility with existing evaluation queries.
 
 ---
 
-### `src/llm_client.py`
+### `src/generation/llm_client.py`
 
 Single `generate(prompt, model_cfg)` interface dispatching to the correct provider.
 All providers share the same retry policy: up to 5 attempts with exponential back-off,
@@ -432,7 +468,7 @@ using `tenacity`. The provider SDK client is instantiated once per `generate()` 
 retries reuse the same client object.
 
 ```python
-from src.llm_client import LLMClient
+from src.generation import LLMClient
 
 client = LLMClient()
 text = client.generate(
@@ -452,14 +488,16 @@ text = client.generate(
 
 ---
 
-### `src/narrative_generator.py`
+### `src/generation/generator.py`
 
-Iterates every `(dataset, model, prompt_strategy, instance)` combination, calls the LLM,
-and persists each result to the DB and a JSONL file. A single DB connection is held open
-for the entire run to avoid per-narrative connection overhead.
+Iterates every `(dataset, model, instance)` combination, renders the single narrative
+prompt, calls the LLM, and persists each result to the DB plus a streaming JSONL file
+under `outputs/generation/<run_id>/`. After the run completes, a consolidated
+`run.json` and a flat `narratives.xlsx` are written too. A single DB connection is held
+open for the entire run to avoid per-narrative connection overhead.
 
 ```python
-from src.narrative_generator import run_generation
+from src.generation import run_generation
 
 run_id = run_generation(
     cfg,
@@ -470,18 +508,42 @@ run_id = run_generation(
 )
 ```
 
-Individual API failures on a single instance are caught and logged without aborting the run.
+Individual API failures on a single instance are caught, logged, and recorded in
+the JSON / XLSX outputs with their `error` field populated, without aborting the run.
 
 ---
 
-### `src/evaluator.py`
+### `src/generation/exporters.py`
+
+Three writers that persist a generation run to disk in complementary formats. Every
+record carries the full rendered prompt and a `model` block (provider, model name,
+temperature, max_tokens) so external consumers — paper appendices, dashboards,
+re-evaluation pipelines — can reconstruct exactly what was sent to the LLM.
+
+```python
+from src.generation import write_jsonl, write_run_json, write_xlsx
+from src.generation.exporters import NarrativeRecord
+
+records = [NarrativeRecord(...), ...]
+
+write_jsonl("narratives.jsonl", records)              # one JSON object per line
+write_run_json("run.json", run_metadata, records)      # consolidated single file
+write_xlsx("narratives.xlsx", records)                 # one row per narrative
+```
+
+The streaming writer used live during generation is `append_jsonl(path, record)`,
+which appends one record at a time so an interrupted run loses nothing.
+
+---
+
+### `src/evaluation/evaluator.py`
 
 Applies five independent rule-based checks to a single narrative given its ground-truth
 SHAP values. Returns an `EvaluationResult` with per-type boolean flags and a `notes` list
 explaining each flag.
 
 ```python
-from src.evaluator import evaluate_narrative, llm_judge, EvaluationResult
+from src.evaluation import evaluate_narrative, llm_judge, EvaluationResult
 from src.config import EvaluationConfig
 
 shap_values = {"age": 0.42, "education_num": 0.31, "hours_per_week": 0.18, "capital_gain": -0.05}
@@ -515,9 +577,9 @@ receives the SHAP values and narrative and returns a structured YES/NO verdict f
 the five hallucination types. Rule-based and judge verdicts are merged with logical OR:
 a narrative is flagged if either pass raises an alarm.
 
-**Important:** for chain-of-thought narratives, `run_evaluation.py` automatically extracts
-only the text after the `Narrative:` heading before running either evaluation pass. This
-prevents the step-by-step reasoning text from being misread as a factual claim.
+**Note:** the evaluator and `run_evaluation.py` are scheduled for a follow-up rewrite that
+will consume the new `outputs/generation/<run_id>/` artefacts directly instead of reading
+SQLite. The current behaviour is unchanged for now.
 
 ---
 
@@ -580,7 +642,7 @@ fig3 = plot_shap_scatter(df, feature_col="age", shap_col="shap_age")
 from src.visualisation.hallucination_rates import (
     plot_rates_by_type,      # one bar per hallucination type
     plot_rates_by_model,     # overall rate per model
-    plot_rates_by_strategy,  # overall rate per prompt strategy
+    plot_rates_by_strategy,  # overall rate per prompt strategy (degenerate now: 1 strategy)
     plot_rates_by_dataset,   # overall rate per dataset
     plot_type_by_model,      # grouped: hallucination type × model
 )
@@ -595,6 +657,11 @@ from src.visualisation.heatmaps import (
     plot_type_heatmap,             # rows=model, cols=hallucination type
 )
 ```
+
+The strategy-axis charts were designed for the previous zero-shot / few-shot /
+chain-of-thought split; with the unified narrative prompt they collapse to a single
+column. They are still callable but will be removed or restructured when the
+visualisation module is revisited.
 
 #### `export.py` — save figures to disk
 
@@ -614,25 +681,32 @@ saved = export_all_figures(evals_df, cfg, run_id)
 
 ---
 
-## Prompt templates
+## Prompt template
 
-Templates live in `config/prompts/` and use Jinja2 syntax (`{{ variable }}`).
-Two variables are available in every template:
+A single Jinja2 template at `config/prompts/narrative.j2` is used for all datasets
+and all models. It is a near-verbatim adaptation of the prompt from
+Martens et al. (2024), *Tell Me a Story! Narrative-Driven XAI with Large Language
+Models*, repurposed for tabular classification tasks: the football "Man of the
+Match" framing is replaced by a per-dataset task description and class label
+loaded from `config/default.yaml`.
+
+**Template variables (all required — `StrictUndefined` raises on typos):**
 
 
-| Variable           | Content                                                              |
-| ------------------ | -------------------------------------------------------------------- |
-| `{{ dataset }}`    | Dataset name (e.g. `"adult"`)                                        |
-| `{{ shap_table }}` | SHAP table string, sorted by |SHAP| descending, one feature per line |
+| Variable                       | Content                                                                                  |
+| ------------------------------ | ---------------------------------------------------------------------------------------- |
+| `{{ dataset }}`                | Dataset name (e.g. `"adult"`)                                                            |
+| `{{ task_description }}`       | Per-dataset task sentence from config (e.g. `"predict whether income exceeds $50,000"`)   |
+| `{{ positive_class_label }}`   | Per-dataset positive class label (e.g. `"income above $50,000"`, `"good credit risk"`)   |
+| `{{ negative_class_label }}`   | Per-dataset negative class label                                                         |
+| `{{ pred_proba }}`             | Model's predicted probability of class 1, in `[0, 1]` (rendered as a percentage)         |
+| `{{ pred_label }}`             | Model's predicted class label (`0` or `1`)                                               |
+| `{{ pred_class_text }}`        | Resolved class label string for the predicted class                                      |
+| `{{ shap_table }}`             | SHAP table sorted from most positive to most negative, one feature per line              |
 
 
-
-| File                   | Strategy         | What it does                                                                                                                                                 |
-| ---------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `zero_shot.txt`        | Zero-shot        | Instructs the model directly; lists the three faithfulness requirements (direction, rank, magnitude)                                                         |
-| `few_shot.txt`         | Few-shot         | Provides two worked examples (one per dataset) before asking for the target narrative                                                                        |
-| `chain_of_thought.txt` | Chain-of-thought | Asks the model to explicitly rank features, note their directions, and identify negligible effects before writing the narrative under a `Narrative:` heading |
-
+To swap in an alternative prompt for an experiment, point `prompt.template` in the
+config at a different `.j2` file in the same directory; no code changes required.
 
 ---
 
@@ -673,12 +747,14 @@ all retries) are caught and logged without aborting the run. No silent data loss
 ## Phase completion
 
 
-| Phase | Description                                                                          | Status   |
-| ----- | ------------------------------------------------------------------------------------ | -------- |
-| 1     | Foundation — config, data loader, SQLite schema                                      | Complete |
-| 2     | Generation — LLM client, Jinja2 renderer, narrative generator, CLI                   | Complete |
-| 3     | Evaluation — rule-based detector, CoT stripping, LLM judge, CSV export               | Complete |
-| 4     | Visualisation — dataset overview, SHAP distributions, hallucination charts, heatmaps | Complete |
-| 5     | Export + tests                                                                       | Complete |
+| Phase | Description                                                                                 | Status                  |
+| ----- | ------------------------------------------------------------------------------------------- | ----------------------- |
+| 1     | Foundation — config, data loader, SQLite schema                                             | Complete                |
+| 1b    | Data prep refresh — drop `fnlwgt`, add `pred_proba` / `pred_label`, aggregate German one-hot | Complete                |
+| 2     | Generation — LLM client, Jinja2 renderer, single Martens-style narrative prompt, CLI         | Complete                |
+| 2b    | Output formats — JSONL stream, consolidated `run.json`, flat `narratives.xlsx`               | Complete                |
+| 3     | Evaluation — rule-based detector, LLM judge, CSV export                                     | Pending refactor        |
+| 4     | Visualisation — dataset overview, SHAP distributions, hallucination charts, heatmaps        | Complete (strategy axis to revisit) |
+| 5     | Export + tests                                                                              | Complete                |
 
 

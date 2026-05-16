@@ -31,39 +31,11 @@ from src.db import (
     get_narratives_for_run,
     insert_evaluation,
 )
-from src.evaluator import EvaluationResult, evaluate_narrative, llm_judge
+from src.evaluation import EvaluationResult, evaluate_narrative, llm_judge
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-# ---------------------------------------------------------------------------
-# CoT narrative extraction
-# ---------------------------------------------------------------------------
-
-def _extract_evaluation_text(narrative_text: str, prompt_strategy: str) -> str:
-    """
-    For chain-of-thought outputs, extract only the text after the 'Narrative:'
-    heading. The CoT prompt asks the model to reason step-by-step first, then
-    write the final narrative under that heading. Running the evaluator over
-    the reasoning steps causes false positives, so we strip them here.
-
-    For zero_shot and few_shot, the full text is returned unchanged.
-    """
-    if prompt_strategy != "chain_of_thought":
-        return narrative_text
-
-    lower = narrative_text.lower()
-    # Use rfind so that if "narrative:" appears in the reasoning steps we still
-    # land on the last (genuine) occurrence.
-    marker = "narrative:"
-    idx = lower.rfind(marker)
-    if idx != -1:
-        return narrative_text[idx + len(marker):].strip()
-
-    # Fallback: heading not found — evaluate the full text
-    return narrative_text
 
 
 # ---------------------------------------------------------------------------
@@ -199,12 +171,9 @@ def run_evaluation(
                     pbar.update(1)
                     continue
 
-                # Strip CoT reasoning — only evaluate the final narrative text
-                eval_text = _extract_evaluation_text(
-                    narr["narrative_text"], narr["prompt_strategy"]
-                )
+                # Single Martens-style narrative — no CoT trimming needed.
+                eval_text = narr["narrative_text"]
 
-                # Rule-based evaluation
                 result: EvaluationResult = evaluate_narrative(
                     narrative=eval_text,
                     shap_values=shap_values,
@@ -248,7 +217,7 @@ def run_evaluation(
                     "dataset": dataset,
                     "instance_id": narr["instance_id"],
                     "model_id": narr["model_id"],
-                    "prompt_strategy": narr["prompt_strategy"],
+                    "prompt_strategy": narr.get("prompt_strategy", "narrative"),
                     **result.to_dict(),
                     "evaluated_at": evaluated_at,
                 })

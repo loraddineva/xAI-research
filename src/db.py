@@ -270,10 +270,13 @@ def narrative_exists(
     dataset: str,
     instance_id: int,
     model_id: str,
-    prompt_strategy: str,
 ) -> bool:
     """
-    Return True if a narrative already exists for this exact combination.
+    Return True if a narrative already exists for this combination.
+
+    Now that there is a single prompt strategy (Martens-style narrative),
+    the resume key is just (run_id, dataset, instance_id, model_id) — the
+    prompt_strategy column is left at its placeholder value.
 
     Used by the generator to skip work that was already completed in a
     previous (possibly interrupted) run, enabling crash-safe resume.
@@ -282,9 +285,9 @@ def narrative_exists(
         """
         SELECT 1 FROM narratives
         WHERE run_id = ? AND dataset = ? AND instance_id = ?
-          AND model_id = ? AND prompt_strategy = ?
+          AND model_id = ?
         LIMIT 1
         """,
-        (run_id, dataset, instance_id, model_id, prompt_strategy),
+        (run_id, dataset, instance_id, model_id),
     ).fetchone()
     return row is not None

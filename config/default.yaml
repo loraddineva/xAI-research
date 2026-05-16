@@ -7,10 +7,16 @@ datasets:
     path: "data/processed/adult.csv"
     shap_col_prefix: "shap_"
     n_instances: 100
+    task_description: "predict whether a person's annual income exceeds $50,000, based on demographic and employment data"
+    positive_class_label: "income above $50,000"
+    negative_class_label: "income at or below $50,000"
   - name: "german_credit"
     path: "data/processed/german_credit.csv"
     shap_col_prefix: "shap_"
     n_instances: 100
+    task_description: "predict whether a loan applicant is a good credit risk, based on financial and personal data"
+    positive_class_label: "good credit risk"
+    negative_class_label: "bad credit risk"
 
 models:
   - id: "claude-opus"
@@ -34,12 +40,8 @@ models:
   #   model_name: "llama3:70b"
   #   base_url: "http://localhost:11434"
 
-prompts:
-  strategies:
-    - zero_shot
-    - few_shot
-    - chain_of_thought
-  template_dir: "config/prompts/"
+prompt:
+  template: "config/prompts/narrative.j2"
 
 evaluation:
   top_k_features: 3
@@ -49,8 +51,9 @@ evaluation:
 
 storage:
   db_path: "outputs/results.db"
+  generation_dir: "outputs/generation/"
   export_dir: "outputs/evaluations/"
-  narrative_dir: "outputs/narratives/"
+  narrative_dir: "outputs/narratives/"     # legacy alias; new runs write to generation_dir
 
 visualisation:
   figure_dir: "outputs/figures/"

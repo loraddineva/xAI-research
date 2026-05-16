@@ -11,21 +11,22 @@ SHAP columns:    shap_<feature_name>  (e.g. shap_age, shap_income).
 
 Public API
 ----------
-    load_dataset(dataset_cfg)          -> pd.DataFrame
-    get_shap_columns(df, prefix)       -> List[str]
-    get_feature_columns(df, prefix)    -> List[str]
-    top_k_shap_features(row, prefix, k) -> List[Tuple[str, float]]
-    format_shap_table(row, prefix)     -> str   (for prompt injection)
+    load_dataset(dataset_cfg)                   -> pd.DataFrame
+    get_shap_columns(df, prefix)                -> List[str]
+    get_feature_columns(df, prefix)             -> List[str]
+    top_k_shap_features(row, prefix, k)         -> List[Tuple[str, float]]
+    format_shap_table(row, prefix, dataset_name)-> str   (for prompt injection)
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import pandas as pd
 
 from src.config import DatasetConfig
+from src.dataset_metadata import get_categorical_meaning
 
 
 # ---------------------------------------------------------------------------
@@ -114,29 +115,63 @@ def top_k_shap_features(
     return shap_items[:k]
 
 
-def format_shap_table(row: pd.Series, prefix: str) -> str:
+def _format_feature_value(value: object) -> str:
+    """
+    Render a single feature value compactly:
+      - Integer-valued floats are shown without a trailing ``.0``
+        (so ``30.0`` becomes ``30``); this matches the way the raw UCI
+        CSVs encode integers and avoids a stray decimal in the prompt.
+      - All other floats are passed through ``str()``.
+    """
+    if isinstance(value, float):
+        if value.is_integer():
+            return str(int(value))
+        return str(value)
+    return str(value)
+
+
+def format_shap_table(
+    row: pd.Series,
+    prefix: str,
+    dataset_name: Optional[str] = None,
+) -> str:
     """
     Render all SHAP values for a row as a human-readable table string
     suitable for injection into a prompt template.
 
+    Sort order is signed SHAP value descending (most positive → most negative)
+    to match the Martens et al. (2024) narrative-XAI prompt convention.
+
     Output format (one feature per line):
-        feature_name: +0.42 (feature value: 52)
+        feature_name: +0.4200 (feature value: 52)
+
+    For categorical features (looked up against the registry in
+    ``src.dataset_metadata`` keyed on *dataset_name*), the human-readable
+    label is appended in square brackets after the integer code:
+
+        checking_status: +0.0100 (feature value: 1 [< 0 DM])
     """
     lines: List[str] = []
     shap_cols = [c for c in row.index if c.startswith(prefix)]
-    # Sort by absolute SHAP value descending
-    shap_cols_sorted = sorted(shap_cols, key=lambda c: abs(float(row[c])), reverse=True)
+    shap_cols_sorted = sorted(shap_cols, key=lambda c: float(row[c]), reverse=True)
 
     for shap_col in shap_cols_sorted:
         feature_name = shap_col[len(prefix):]
         shap_val = float(row[shap_col])
         sign = "+" if shap_val >= 0 else ""
 
-        # Try to find the matching feature column for the raw value
         raw_val = row.get(feature_name, None)
-        if raw_val is not None:
-            lines.append(f"  {feature_name}: {sign}{shap_val:.4f} (feature value: {raw_val})")
-        else:
+        if raw_val is None:
             lines.append(f"  {feature_name}: {sign}{shap_val:.4f}")
+            continue
+
+        value_str = _format_feature_value(raw_val)
+        meaning = get_categorical_meaning(dataset_name, feature_name, raw_val)
+        if meaning is not None:
+            display = f"{value_str} [{meaning}]"
+        else:
+            display = value_str
+
+        lines.append(f"  {feature_name}: {sign}{shap_val:.4f} (feature value: {display})")
 
     return "\n".join(lines)

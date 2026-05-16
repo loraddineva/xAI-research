@@ -16,7 +16,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.config import EvaluationConfig
-from src.evaluator import (
+from src.evaluation.evaluator import (
     EvaluationResult,
     evaluate_narrative,
     _check_sign_inversion,

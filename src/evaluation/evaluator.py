@@ -1,5 +1,5 @@
 """
-src/evaluator.py
+src/evaluation/evaluator.py
 Rule-based hallucination detection for LLM-generated SHAP narratives.
 
 Five hallucination types (from the taxonomy in CLAUDE.md):
@@ -460,7 +460,7 @@ def llm_judge(
     Returns:
         An EvaluationResult populated from the judge's response.
     """
-    from src.llm_client import LLMClient
+    from src.generation.llm_client import LLMClient
 
     shap_lines = "\n".join(
         f"  {feat}: {val:+.4f}"

@@ -1,10 +1,10 @@
 """
-src/llm_client.py
+src/generation/llm_client.py
 Unified LLM client that dispatches to the correct provider based on ModelConfig.
 
 Usage
 -----
-    from src.llm_client import LLMClient
+    from src.generation.llm_client import LLMClient
     from src.config import load_config
 
     cfg = load_config()
@@ -53,8 +53,8 @@ class LLMClient:
     Provider-agnostic text generation client.
 
     Each provider method instantiates the SDK client once per generate() call,
-    then wraps only the API call itself in the retry loop. This means retries
-    reuse the same client object rather than reconstructing it on every attempt.
+    then wraps only the API call itself in the retry loop. Retries reuse the
+    same client object rather than reconstructing it on every attempt.
     """
 
     def generate(self, prompt: str, model_cfg: ModelConfig) -> str:
@@ -97,7 +97,6 @@ class LLMClient:
         except ImportError as e:
             raise ImportError("anthropic package not installed. Run: pip install anthropic") from e
 
-        # Instantiate the client once — retries reuse it
         client = _anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
 
         @retry(retry=retry_if_exception_type(Exception), **_RETRY_KWARGS)

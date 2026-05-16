@@ -17,7 +17,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.config import ModelConfig
-from src.llm_client import LLMClient
+from src.generation.llm_client import LLMClient
 
 
 # ---------------------------------------------------------------------------

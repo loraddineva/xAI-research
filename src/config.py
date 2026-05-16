@@ -6,7 +6,6 @@ Load with: cfg = load_config()  (reads config/default.yaml by default)
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import List, Optional
 
@@ -24,37 +23,51 @@ class RunConfig(BaseModel):
 
 
 class DatasetConfig(BaseModel):
+    """
+    A single dataset entry.
+
+    The narrative-prompt fields (`task_description`, `positive_class_label`,
+    `negative_class_label`) are injected directly into the Martens-style
+    template so the same prompt works across datasets without per-dataset
+    template forking.
+    """
+
     name: str
     path: str
     shap_col_prefix: str = "shap_"
     n_instances: int = 100
+    task_description: str = ""
+    positive_class_label: str = "positive class"
+    negative_class_label: str = "negative class"
 
 
 class ModelConfig(BaseModel):
     id: str
-    provider: str                  # anthropic | together | mistral | ollama
+    provider: str                    # anthropic | together | mistral | ollama
     model_name: str
     max_tokens: int = 512
     temperature: float = 0.0
-    base_url: Optional[str] = None  # used by ollama
+    base_url: Optional[str] = None   # used by ollama
 
 
-class PromptsConfig(BaseModel):
-    strategies: List[str] = Field(default_factory=lambda: ["zero_shot", "few_shot", "chain_of_thought"])
-    template_dir: str = "config/prompts/"
+class PromptConfig(BaseModel):
+    """Single narrative prompt (no zero/few/CoT split)."""
+
+    template: str = "config/prompts/narrative.j2"
 
 
 class EvaluationConfig(BaseModel):
     top_k_features: int = 3
     magnitude_threshold: float = 0.5
     use_llm_judge: bool = False
-    llm_judge_model: str = "claude-opus-4-6"
+    llm_judge_model: str = "claude-opus"
 
 
 class StorageConfig(BaseModel):
     db_path: str = "outputs/results.db"
+    generation_dir: str = "outputs/generation/"
     export_dir: str = "outputs/evaluations/"
-    narrative_dir: str = "outputs/narratives/"
+    narrative_dir: str = "outputs/narratives/"      # legacy alias
 
 
 class VisualisationConfig(BaseModel):
@@ -71,7 +84,7 @@ class AppConfig(BaseModel):
     run: RunConfig = Field(default_factory=RunConfig)
     datasets: List[DatasetConfig] = Field(default_factory=list)
     models: List[ModelConfig] = Field(default_factory=list)
-    prompts: PromptsConfig = Field(default_factory=PromptsConfig)
+    prompt: PromptConfig = Field(default_factory=PromptConfig)
     evaluation: EvaluationConfig = Field(default_factory=EvaluationConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
     visualisation: VisualisationConfig = Field(default_factory=VisualisationConfig)
@@ -80,13 +93,13 @@ class AppConfig(BaseModel):
     # Convenience helpers
     # ------------------------------------------------------------------
 
-    def prompt_template_path(self, strategy: str) -> Path:
-        """Resolve the absolute path for a prompt template file."""
-        return Path(self.prompts.template_dir) / f"{strategy}.txt"
+    def prompt_template_path(self) -> Path:
+        """Resolve the absolute path of the narrative prompt template."""
+        return Path(self.prompt.template)
 
-    def load_prompt_template(self, strategy: str) -> str:
-        """Read and return the raw text of a prompt template."""
-        path = self.prompt_template_path(strategy)
+    def load_prompt_template(self) -> str:
+        """Read and return the raw text of the narrative prompt template."""
+        path = self.prompt_template_path()
         if not path.exists():
             raise FileNotFoundError(f"Prompt template not found: {path}")
         return path.read_text(encoding="utf-8")
