@@ -14,10 +14,10 @@ Usage
     python scripts/run_generation.py --dry-run
 
     # Scoped run: one model, one dataset, 5 instances
-    python scripts/run_generation.py --model claude-opus --dataset adult --n 5
+    python scripts/run_generation.py --model llama3-70b --dataset adult --n 5
 
     # Dry-run scoped
-    python scripts/run_generation.py --dry-run --model claude-opus --dataset adult --n 5
+    python scripts/run_generation.py --dry-run --model llama3-70b --dataset adult --n 5
 """
 
 from __future__ import annotations

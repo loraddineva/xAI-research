@@ -11,12 +11,12 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 from tqdm import tqdm
 
-from src.config import AppConfig, ModelConfig
+from src.config import AppConfig, ModelConfig, validate_extraction_model
 from src.evaluation.extraction_prompt_renderer import ExtractionPromptRenderer
 from src.evaluation.robustness import compute_robustness, try_parse_extraction
 from src.evaluation.evaluator import _feature_names_for_dataset
@@ -32,6 +32,113 @@ from src.storage.narratives_store import load_narratives_csv, narratives_csv_pat
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _successful_eval_mask(evals_df: pd.DataFrame) -> pd.Series:
+    """Rows with a parsed extraction (no parse_error, non-empty extraction_json)."""
+    has_json = evals_df["extraction_json"].notna() & (
+        evals_df["extraction_json"].astype(str).str.strip() != ""
+    )
+    if "parse_error" in evals_df.columns:
+        no_parse_error = evals_df["parse_error"].fillna("").astype(str).str.strip() == ""
+        return has_json & no_parse_error
+    return has_json
+
+
+def select_narratives_for_robustness(
+    narratives_df: pd.DataFrame,
+    evals_df: Optional[pd.DataFrame],
+    *,
+    fraction: float,
+    seed: int,
+    balanced: bool = True,
+    require_successful_eval: bool = True,
+) -> Tuple[pd.DataFrame, dict]:
+    """
+    Choose narratives for robustness checking.
+
+    When ``fraction`` < 1 and ``balanced`` is True, sample the same count from each
+    ``prompt_strategy`` (e.g. equal Martens and chain_of_thought). The per-strategy
+    count is ``floor(n_target / 2)`` capped by availability in each group.
+
+    Returns:
+        (selected_narratives_df, selection_info dict for logging)
+    """
+    info: dict = {
+        "fraction": fraction,
+        "balanced": balanced,
+        "require_successful_eval": require_successful_eval,
+    }
+
+    df = narratives_df[narratives_df["error"].fillna("").astype(str) == ""].copy()
+    info["n_generation_ok"] = len(df)
+
+    if require_successful_eval:
+        if evals_df is None or evals_df.empty:
+            raise ValueError(
+                "Successful evaluations are required for robustness subsampling, "
+                "but no evaluations.csv was found for this run."
+            )
+        ok_evals = evals_df.loc[_successful_eval_mask(evals_df)].copy()
+        info["n_successful_evals"] = len(ok_evals)
+        ok_ids = set(ok_evals["narrative_id"].astype(str))
+        df = df[df["narrative_id"].astype(str).isin(ok_ids)]
+        info["n_eligible"] = len(df)
+    else:
+        info["n_eligible"] = len(df)
+
+    if df.empty:
+        raise ValueError("No narratives eligible for robustness checking.")
+
+    if fraction >= 1.0:
+        if balanced:
+            counts = df.groupby("prompt_strategy").size()
+            n_per = int(counts.min()) if len(counts) else len(df)
+            parts = []
+            for strategy, group in df.groupby("prompt_strategy"):
+                parts.append(
+                    group.sample(n=min(n_per, len(group)), random_state=seed)
+                )
+            df = pd.concat(parts).sort_index()
+            info["n_selected"] = len(df)
+            info["per_strategy"] = df.groupby("prompt_strategy").size().to_dict()
+            info["mode"] = "balanced_full"
+        else:
+            info["n_selected"] = len(df)
+            info["per_strategy"] = df.groupby("prompt_strategy").size().to_dict()
+            info["mode"] = "all_eligible"
+        return df, info
+
+    n_target = max(2, int(len(df) * fraction))
+    info["n_target"] = n_target
+
+    if balanced:
+        n_per_strategy = n_target // 2
+        parts = []
+        per_strategy: Dict[str, int] = {}
+        for idx, (strategy, group) in enumerate(
+            sorted(df.groupby("prompt_strategy"), key=lambda x: str(x[0]))
+        ):
+            n_take = min(n_per_strategy, len(group))
+            per_strategy[str(strategy)] = n_take
+            if n_take > 0:
+                parts.append(
+                    group.sample(n=n_take, random_state=seed + idx)
+                )
+        if not parts:
+            raise ValueError("Balanced subsample produced no narratives.")
+        df = pd.concat(parts).sort_index()
+        info["n_selected"] = len(df)
+        info["per_strategy"] = per_strategy
+        info["mode"] = "balanced_subsample"
+    else:
+        n_sample = max(1, n_target)
+        df = df.sample(n=min(n_sample, len(df)), random_state=seed).sort_index()
+        info["n_selected"] = len(df)
+        info["per_strategy"] = df.groupby("prompt_strategy").size().to_dict()
+        info["mode"] = "random_subsample"
+
+    return df, info
 
 
 def _model_with_temperature(model_cfg: ModelConfig, temperature: float) -> ModelConfig:
@@ -97,6 +204,7 @@ def run_robustness(
     dry_run: bool = False,
     n_limit: Optional[int] = None,
     subsample_fraction: Optional[float] = None,
+    balanced_subsample: Optional[bool] = None,
     seed: Optional[int] = None,
 ) -> str:
     """
@@ -110,6 +218,11 @@ def run_robustness(
     """
     rb_cfg = cfg.evaluation.robustness
     fraction = subsample_fraction if subsample_fraction is not None else rb_cfg.subsample_fraction
+    balanced = (
+        balanced_subsample
+        if balanced_subsample is not None
+        else rb_cfg.balanced_subsample
+    )
     rng_seed = seed if seed is not None else cfg.run.seed
 
     gen_dir = run_dir(cfg, run_id)
@@ -118,15 +231,25 @@ def run_robustness(
         raise FileNotFoundError(f"Generation run not found: {narratives_path.resolve()}")
 
     narratives_df = load_narratives_csv(narratives_path)
-    narratives_df = narratives_df[
-        narratives_df["error"].fillna("").astype(str) == ""
-    ]
 
-    if fraction < 1.0:
-        n_sample = max(1, int(len(narratives_df) * fraction))
-        narratives_df = narratives_df.sample(
-            n=n_sample, random_state=rng_seed
-        ).sort_index()
+    eval_dir = eval_run_dir(cfg.evaluation.export_dir, run_id)
+    eval_csv = evaluations_csv_path(eval_dir)
+    evals_df: Optional[pd.DataFrame] = None
+    evals_by_narrative: Dict[str, dict] = {}
+    if eval_csv.exists():
+        evals_df = load_evaluations_csv(eval_csv)
+        ok_mask = _successful_eval_mask(evals_df)
+        for _, row in evals_df.loc[ok_mask].iterrows():
+            evals_by_narrative[str(row["narrative_id"])] = row.to_dict()
+
+    narratives_df, selection_info = select_narratives_for_robustness(
+        narratives_df,
+        evals_df,
+        fraction=fraction,
+        seed=rng_seed,
+        balanced=balanced,
+        require_successful_eval=rb_cfg.require_successful_eval,
+    )
 
     if n_limit is not None:
         narratives_df = narratives_df.head(n_limit)
@@ -134,23 +257,24 @@ def run_robustness(
     if narratives_df.empty:
         raise ValueError(f"No narratives to check for run '{run_id}'.")
 
-    eval_dir = eval_run_dir(cfg.evaluation.export_dir, run_id)
-    eval_csv = evaluations_csv_path(eval_dir)
-    evals_by_narrative: Dict[str, dict] = {}
-    if eval_csv.exists():
-        evals_df = load_evaluations_csv(eval_csv)
-        evals_df = evals_df[evals_df["parse_error"].fillna("").astype(str) == ""]
-        for _, row in evals_df.iterrows():
-            evals_by_narrative[str(row["narrative_id"])] = row.to_dict()
-
     extraction_model = cfg.get_model(cfg.evaluation.extraction_model_id)
+    if not dry_run:
+        validate_extraction_model(extraction_model)
     robustness_model = _model_with_temperature(extraction_model, rb_cfg.temperature)
 
     print(f"Robustness check for run: {run_id}")
+    print(
+        f"  Extraction : {cfg.evaluation.extraction_model_id} "
+        f"({extraction_model.model_name})"
+    )
     print(f"  Narratives : {len(narratives_df)}")
     print(f"  Runs each  : {rb_cfg.n_runs} @ temperature={rb_cfg.temperature}")
-    if fraction < 1.0:
-        print(f"  Subsample  : {fraction:.0%}")
+    if selection_info.get("n_eligible") is not None:
+        print(f"  Eligible   : {selection_info['n_eligible']} (successful evals)")
+    if fraction < 1.0 or selection_info.get("mode") == "balanced_full":
+        print(f"  Subsample  : {fraction:.0%} ({selection_info.get('mode', 'subsample')})")
+    if selection_info.get("per_strategy"):
+        print(f"  Per strategy: {selection_info['per_strategy']}")
     if dry_run:
         print("[DRY RUN] No LLM calls or disk writes.\n")
     else:
@@ -185,7 +309,8 @@ def run_robustness(
 
             if dry_run:
                 print(
-                    f"\n--- {dataset_name} | {row['model_id']} | {narrative_id[:8]}... ---"
+                    f"\n--- {dataset_name} | {prompt_strategy} | "
+                    f"{cfg.evaluation.extraction_model_id} | {narrative_id[:8]}... ---"
                 )
                 pbar.update(1)
                 continue
@@ -202,6 +327,7 @@ def run_robustness(
             robustness = compute_robustness(
                 parsed,
                 n_requested_runs=rb_cfg.n_runs,
+                top_k_features=cfg.evaluation.top_k_features,
                 min_successful_runs=rb_cfg.min_successful_runs,
                 reliability_threshold=rb_cfg.reliability_threshold,
             )

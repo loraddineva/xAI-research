@@ -43,11 +43,13 @@ class DatasetConfig(BaseModel):
 
 class ModelConfig(BaseModel):
     id: str
-    provider: str                    # anthropic | together | mistral | ollama
+    provider: str                    # huggingface
     model_name: str
     max_tokens: int = 512
     temperature: float = 0.0
-    base_url: Optional[str] = None   # used by ollama
+    generation: bool = True          # False = extraction/eval only; excluded from run_generation
+    base_url: Optional[str] = None   # HF Inference Endpoint URL (required for endpoint-only models)
+    inference_provider: Optional[str] = None  # HF provider slug, e.g. novita; auto if unset
 
 
 class PromptStrategyConfig(BaseModel):
@@ -90,6 +92,7 @@ class VisualisationConfig(BaseModel):
     figure_dir: str = "outputs/figures/"
     format: str = "png"
     dpi: int = 150
+    min_narratives_for_figures: int = 30
 
 
 class RobustnessConfig(BaseModel):
@@ -99,14 +102,16 @@ class RobustnessConfig(BaseModel):
     temperature: float = 0.9
     min_successful_runs: int = 3
     reliability_threshold: float = 0.8
-    subsample_fraction: float = 1.0
+    subsample_fraction: float = 0.1
+    balanced_subsample: bool = True
+    require_successful_eval: bool = True
     max_workers: int = 5
 
 
 class EvaluationConfig(BaseModel):
     """LLM extraction + SHAP comparison evaluation settings."""
 
-    extraction_model_id: str = "claude-opus"
+    extraction_model_id: str = "mistral-7b"
     template: str = "config/prompts/extract.j2"
     top_k_features: int = 3
     export_dir: str = "outputs/evaluations/"
@@ -154,6 +159,43 @@ class AppConfig(BaseModel):
             if d.name == dataset_name:
                 return d
         raise KeyError(f"Dataset '{dataset_name}' not found in config.")
+
+    def generation_models(self) -> List[ModelConfig]:
+        """Models used for narrative generation (excludes extraction-only entries)."""
+        return [m for m in self.models if m.generation]
+
+
+def resolve_model_base_url(model_cfg: ModelConfig) -> str | None:
+    """
+    Resolve HF Inference Endpoint base_url from config or HF_MISTRAL_ENDPOINT_URL.
+
+    HF_MISTRAL_ENDPOINT_URL applies only to extraction-only models (generation=False).
+    Generation models use HF Inference Providers unless models[].base_url is set explicitly.
+    """
+    import os
+
+    url = (model_cfg.base_url or "").strip()
+    if url and "YOUR_ENDPOINT" not in url:
+        return url.rstrip("/")
+    if not model_cfg.generation:
+        env_url = (os.environ.get("HF_MISTRAL_ENDPOINT_URL") or "").strip()
+        if env_url:
+            return env_url.rstrip("/")
+    return url.rstrip("/") if url else None
+
+
+def validate_extraction_model(model_cfg: ModelConfig) -> None:
+    """Require a deployed Endpoint URL for extraction-only models."""
+    if model_cfg.generation:
+        return
+    base_url = resolve_model_base_url(model_cfg)
+    if not base_url or "YOUR_ENDPOINT" in base_url:
+        raise ValueError(
+            f"Extraction model '{model_cfg.id}' requires a Hugging Face Inference "
+            f"Endpoint URL. Set models[].base_url in config/default.yaml or "
+            f"HF_MISTRAL_ENDPOINT_URL in .env after deploying "
+            f"{model_cfg.model_name}."
+        )
 
 
 # ---------------------------------------------------------------------------

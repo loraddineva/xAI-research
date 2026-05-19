@@ -6,7 +6,7 @@ Deterministic comparison of extraction output to ground-truth SHAP values.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from src.evaluation.extraction_parser import ExtractionResult
 
@@ -52,6 +52,30 @@ def _top_k_by_abs_shap(
     return items[:k]
 
 
+def extraction_top_k_set(
+    extraction: ExtractionResult,
+    top_k_features: int = 3,
+) -> Optional[frozenset[str]]:
+    """
+    Top-k feature names by narrative ``rank`` (lowest ranks first), as a set.
+
+    Returns ``None`` when fewer than *top_k_features* are mentioned, matching
+    the rank-swap rule in :func:`compare_to_shap`.
+    """
+    mentioned = {
+        name: feat
+        for name, feat in extraction.features.items()
+        if feat.exists
+    }
+    if len(mentioned) < top_k_features:
+        return None
+    narrative_top_k = sorted(
+        mentioned.items(),
+        key=lambda x: x[1].rank,
+    )[:top_k_features]
+    return frozenset(name for name, _ in narrative_top_k)
+
+
 def compare_to_shap(
     extraction: ExtractionResult,
     shap_values_sorted: List[List[Any]],
@@ -71,9 +95,15 @@ def compare_to_shap(
             f"Unknown features in narrative: {extraction.unknown_features}"
         )
 
+    mentioned = {
+        name: feat
+        for name, feat in extraction.features.items()
+        if feat.exists
+    }
+
     # Sign inversion
     sign_failures: List[str] = []
-    for name, feat in extraction.features.items():
+    for name, feat in mentioned.items():
         shap_val = shap_map.get(name)
         if shap_val is None or abs(shap_val) < _SHAP_EPS:
             continue
@@ -86,24 +116,24 @@ def compare_to_shap(
         result.sign_inversion = 1
         notes["sign_inversion"] = "; ".join(sign_failures)
 
-    # Rank swap: narrative rank-0 vs global SHAP top by |SHap|
-    if extraction.features and shap_map:
-        narrative_top = min(
-            extraction.features.items(),
-            key=lambda x: x[1].rank,
-        )[0]
-        shap_top = max(shap_map.items(), key=lambda x: abs(x[1]))[0]
-        if narrative_top != shap_top:
+    # Rank swap: top-k narrative features (by rank) vs top-k SHAP by |SHAP| as sets
+    narrative_top_set: Optional[Set[str]] = extraction_top_k_set(
+        extraction, top_k_features
+    )
+    if narrative_top_set is not None and shap_map:
+        shap_top_k = _top_k_by_abs_shap(shap_map, top_k_features)
+        shap_top_set = {name for name, _ in shap_top_k}
+        if narrative_top_set != shap_top_set:
             result.rank_swap = 1
             notes["rank_swap"] = (
-                f"Narrative most important: {narrative_top}; "
-                f"SHAP top by |value|: {shap_top}"
+                f"Narrative top-{top_k_features}: {sorted(narrative_top_set)}; "
+                f"SHAP top-{top_k_features} by |value|: {sorted(shap_top_set)}"
             )
 
     # Omission: top-k SHAP features not in extraction
     top_k = _top_k_by_abs_shap(shap_map, top_k_features)
-    mentioned = set(extraction.features.keys())
-    omitted = [name for name, _ in top_k if name not in mentioned]
+    mentioned_names = set(mentioned.keys())
+    omitted = [name for name, _ in top_k if name not in mentioned_names]
     if omitted:
         result.omission = 1
         notes["omission"] = f"Top-{top_k_features} SHAP features not mentioned: {omitted}"

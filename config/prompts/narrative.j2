@@ -1,8 +1,13 @@
 An AI model was used to {{ task_description }}. The input features describe the instance, and the target variable indicates whether the instance belongs to the class "{{ positive_class_label }}".
 
-An AI model estimated a {{ "%.0f"|format(pred_proba * 100) }}% probability that the instance belongs to the positive class, "{{ positive_class_label }}". Based on this probability, the model's final predicted class was "{{ pred_class_text }}". The provided SHAP table was generated to explain this outcome. It includes every feature along with its value for that instance, and the SHAP value assigned to it. Numeric features are shown in their original units; categorical features are shown as their integer code followed by the human-readable category in square brackets, e.g. "checking_status: 1 [< 0 DM]". The goal of SHAP is to explain the prediction of an instance by computing the contribution of each feature to the prediction. The SHAP explanation method computes Shapley values from coalitional game theory. The feature values of a data instance act as players in a coalition. Shapley values tell us how to fairly distribute the "payout" (= the prediction) among the features. A player can be an individual feature value, e.g. for tabular data. The scores in the table are sorted from most positive to most negative.
+An AI model estimated a {{ "%.0f"|format(pred_proba * 100) }}% probability that the instance belongs to the positive class, "{{ positive_class_label }}". Based on this probability, the model's final predicted class was "{{ pred_class_text }}". The SHAP table below explains how each feature contributed to this prediction. Positive SHAP values push toward "{{ positive_class_label }}"; negative SHAP values push toward "{{ negative_class_label }}". Contributions are sorted from most positive to most negative (this is not necessarily the same as importance rank by absolute value).
 
-SHAP table:
+## Instance profile (feature values for this person)
+
+{{ instance_snapshot }}
+
+## SHAP contributions (model attributions only)
+
 {{ shap_table }}
 
-Can you come up with a plausible, fluent story as to why the model could have predicted this outcome, based on the most influential positive and most influential negative SHAP values? Focus on the ones with the highest absolute value. Try to explain the most important feature values in this story, as well as potential interactions that fit the story. No need to enumerate individual features outside of the story. Conclude with a summary of why this classification may have occurred.
+Can you come up with a plausible, fluent story as to why the model could have predicted this outcome? Use the instance profile to describe who this person is, and the SHAP table to explain what drove the score. Focus on features with the largest absolute SHAP contributions. For each feature you discuss, keep the direction of influence consistent with its SHAP sign. Do not treat feature values as if they were SHAP scores. Conclude with a summary of why this classification may have occurred.

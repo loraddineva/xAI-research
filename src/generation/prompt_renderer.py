@@ -16,7 +16,7 @@ import pandas as pd
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
 from src.config import AppConfig, DatasetConfig, PromptStrategyConfig
-from src.data_loader import format_shap_table
+from src.data_loader import format_instance_snapshot, format_shap_table
 
 
 class PromptRenderer:
@@ -86,11 +86,13 @@ class PromptRenderer:
             else dataset_cfg.negative_class_label
         )
 
-        shap_table = format_shap_table(
+        prefix = dataset_cfg.shap_col_prefix
+        instance_snapshot = format_instance_snapshot(
             row,
-            dataset_cfg.shap_col_prefix,
+            prefix,
             dataset_name=dataset_cfg.name,
         )
+        shap_table = format_shap_table(row, prefix)
 
         return template.render(
             dataset=dataset_cfg.name,
@@ -100,5 +102,6 @@ class PromptRenderer:
             pred_proba=pred_proba,
             pred_label=pred_label,
             pred_class_text=pred_class_text,
+            instance_snapshot=instance_snapshot,
             shap_table=shap_table,
         )

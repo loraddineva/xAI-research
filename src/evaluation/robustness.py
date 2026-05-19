@@ -10,6 +10,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence
 
+from src.evaluation.compare_to_shap import extraction_top_k_set
 from src.evaluation.extraction_parser import ExtractionResult, parse_extraction_response
 
 
@@ -36,7 +37,6 @@ def _normalize_value(value: Any) -> Any:
 @dataclass
 class FeatureAgreement:
     sign_agreement: float
-    rank_agreement: float
     value_agreement: Optional[float]
 
 
@@ -45,6 +45,7 @@ class RobustnessResult:
     n_successful_runs: int
     n_requested_runs: int
     per_feature: Dict[str, FeatureAgreement] = field(default_factory=dict)
+    top_k_set_agreement: Optional[float] = None
     narrative_reliability_score: Optional[float] = None
     flagged_low_reliability: bool = False
     extraction_unreliable: bool = False
@@ -57,11 +58,11 @@ class RobustnessResult:
             "per_feature": {
                 name: {
                     "sign_agreement": fa.sign_agreement,
-                    "rank_agreement": fa.rank_agreement,
                     "value_agreement": fa.value_agreement,
                 }
                 for name, fa in self.per_feature.items()
             },
+            "top_k_set_agreement": self.top_k_set_agreement,
             "narrative_reliability_score": self.narrative_reliability_score,
             "flagged_low_reliability": self.flagged_low_reliability,
             "extraction_unreliable": self.extraction_unreliable,
@@ -72,15 +73,20 @@ def compute_robustness(
     extractions: List[ExtractionResult],
     *,
     n_requested_runs: int,
+    top_k_features: int = 3,
     min_successful_runs: int = 3,
     reliability_threshold: float = 0.8,
 ) -> RobustnessResult:
     """
     Compute per-field and narrative-level agreement across parsed extractions.
 
+    Rank reliability uses the same top-*k* **set** rule as faithfulness evaluation
+    (lowest ``rank`` values, order within the set ignored), not per-feature rank integers.
+
     Args:
         extractions: Successfully parsed extraction results (may be fewer than requested).
         n_requested_runs: Number of extraction calls attempted.
+        top_k_features: Size of the importance set (default 3, matches evaluation).
         min_successful_runs: Below this count, mark extraction_unreliable and skip scoring.
         reliability_threshold: Narratives with score below this are flagged_low_reliability.
     """
@@ -107,7 +113,6 @@ def compute_robustness(
             continue
 
         signs: List[int] = []
-        ranks: List[int] = []
         values: List[Any] = []
         has_non_null_value = False
 
@@ -115,8 +120,9 @@ def compute_robustness(
             if feature_name not in ext.features:
                 continue
             feat = ext.features[feature_name]
+            if not feat.exists:
+                continue
             signs.append(feat.sign)
-            ranks.append(feat.rank)
             norm_val = _normalize_value(feat.value)
             values.append(norm_val)
             if norm_val is not None:
@@ -128,17 +134,29 @@ def compute_robustness(
 
         result.per_feature[feature_name] = FeatureAgreement(
             sign_agreement=_proportion_agreement(signs),
-            rank_agreement=_proportion_agreement(ranks),
             value_agreement=value_agreement,
         )
         scored_features.append(feature_name)
 
+    top_k_sets: List[frozenset[str]] = []
+    for ext in extractions:
+        top_set = extraction_top_k_set(ext, top_k_features)
+        if top_set is not None:
+            top_k_sets.append(top_set)
+
+    if top_k_sets:
+        result.top_k_set_agreement = _proportion_agreement(top_k_sets)
+
+    score_parts: List[float] = []
     if scored_features:
-        sign_scores = [result.per_feature[f].sign_agreement for f in scored_features]
-        rank_scores = [result.per_feature[f].rank_agreement for f in scored_features]
-        result.narrative_reliability_score = (sum(sign_scores) + sum(rank_scores)) / (
-            2 * len(scored_features)
+        score_parts.extend(
+            result.per_feature[f].sign_agreement for f in scored_features
         )
+    if result.top_k_set_agreement is not None:
+        score_parts.append(result.top_k_set_agreement)
+
+    if score_parts:
+        result.narrative_reliability_score = sum(score_parts) / len(score_parts)
         result.flagged_low_reliability = (
             result.narrative_reliability_score < reliability_threshold
         )

@@ -84,6 +84,10 @@ def parse_extraction_response(
             raise ValueError(f"Feature entry for '{name}' must be an object")
 
         exists = bool(entry.get("exists", True))
+        if not exists:
+            # Model sometimes lists unmentioned features with exists: false; omit them.
+            continue
+
         rank = entry.get("rank")
         if rank is None or not isinstance(rank, (int, float)):
             raise ValueError(f"Feature '{name}' missing valid integer 'rank'")
@@ -93,7 +97,8 @@ def parse_extraction_response(
 
         sign = entry.get("sign")
         if sign not in (1, -1, "1", "-1"):
-            raise ValueError(f"Feature '{name}' sign must be 1 or -1")
+            # Mistral often returns 0 or null when the narrative is neutral/unclear.
+            continue
         sign = int(sign)
 
         assumption = entry.get("assumption", "")
@@ -105,7 +110,7 @@ def parse_extraction_response(
             value = None
 
         features[name] = FeatureExtraction(
-            exists=exists,
+            exists=True,
             rank=rank,
             sign=sign,
             value=value,

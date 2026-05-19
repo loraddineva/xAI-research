@@ -1,0 +1,64 @@
+run_id: pilot_run_20260518T123547_d896fe
+generation_run_id: pilot_run_20260518T123547_d896fe
+created_at: '2026-05-18T12:40:50.827599+00:00'
+config:
+  run:
+    name: pilot_run
+    seed: 42
+  datasets:
+  - name: adult
+    path: data/processed/adult.csv
+    shap_col_prefix: shap_
+    n_instances: 150
+    task_description: predict whether a person's annual income exceeds $50,000, based
+      on demographic and employment data
+    positive_class_label: income above $50,000
+    negative_class_label: income at or below $50,000
+  models:
+  - id: llama3-70b
+    provider: huggingface
+    model_name: meta-llama/Meta-Llama-3-70B-Instruct
+    max_tokens: 2048
+    temperature: 0.0
+    generation: true
+    base_url: null
+    inference_provider: null
+  - id: mistral-7b
+    provider: huggingface
+    model_name: mistralai/Mistral-7B-Instruct-v0.3
+    max_tokens: 1024
+    temperature: 0.0
+    generation: false
+    base_url: null
+    inference_provider: null
+  prompt:
+    strategies:
+    - id: martens
+      template: config/prompts/narrative.j2
+      max_tokens: null
+    - id: chain_of_thought
+      template: config/prompts/chain_of_thought.j2
+      max_tokens: 1024
+  storage:
+    generation_dir: outputs/generation/
+  visualisation:
+    figure_dir: outputs/figures/
+    format: png
+    dpi: 150
+    min_narratives_for_figures: 30
+  evaluation:
+    extraction_model_id: mistral-7b
+    template: config/prompts/extract.j2
+    top_k_features: 3
+    export_dir: outputs/evaluations/
+    robustness:
+      n_runs: 5
+      temperature: 0.9
+      min_successful_runs: 3
+      reliability_threshold: 0.8
+      subsample_fraction: 1.0
+      max_workers: 5
+extraction_model_id: mistral-7b
+n_records: 5
+n_failed: 0
+n_any_hallucination: 5

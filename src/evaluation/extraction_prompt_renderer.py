@@ -39,6 +39,8 @@ class ExtractionPromptRenderer:
         return template.render(
             dataset=dataset_cfg.name,
             task_description=dataset_cfg.task_description,
+            positive_class_label=dataset_cfg.positive_class_label,
+            negative_class_label=dataset_cfg.negative_class_label,
             narrative_text=narrative_text,
             feature_names_list=names_block,
         )

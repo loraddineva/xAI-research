@@ -1,38 +1,36 @@
 run_id: test_run_eval
 generation_run_id: test_run_eval
-created_at: '2026-05-16T08:50:34.250103+00:00'
+created_at: '2026-05-18T13:27:26.484887+00:00'
 config:
   run:
     name: pilot_run
-    seed: 42
+    seed: 1
   datasets:
   - name: adult
     path: data/processed/adult.csv
     shap_col_prefix: shap_
-    n_instances: 100
+    n_instances: 150
     task_description: predict whether a person's annual income exceeds $50,000, based
       on demographic and employment data
     positive_class_label: income above $50,000
     negative_class_label: income at or below $50,000
   models:
-  - id: claude-opus
-    provider: anthropic
-    model_name: claude-opus-4-6
-    max_tokens: 512
-    temperature: 0.0
-    base_url: null
   - id: llama3-70b
-    provider: together
-    model_name: meta-llama/Llama-3-70b-chat-hf
-    max_tokens: 512
+    provider: huggingface
+    model_name: meta-llama/Meta-Llama-3-70B-Instruct
+    max_tokens: 2048
     temperature: 0.0
+    generation: true
     base_url: null
+    inference_provider: null
   - id: mistral-7b
-    provider: mistral
-    model_name: mistral-small-latest
-    max_tokens: 512
+    provider: huggingface
+    model_name: mistralai/Mistral-7B-Instruct-v0.3
+    max_tokens: 1024
     temperature: 0.0
+    generation: false
     base_url: null
+    inference_provider: null
   prompt:
     strategies:
     - id: martens
@@ -47,8 +45,9 @@ config:
     figure_dir: outputs/figures/
     format: png
     dpi: 150
+    min_narratives_for_figures: 30
   evaluation:
-    extraction_model_id: claude-opus
+    extraction_model_id: mistral-7b
     template: config/prompts/extract.j2
     top_k_features: 3
     export_dir: outputs/evaluations/
@@ -59,7 +58,7 @@ config:
       reliability_threshold: 0.8
       subsample_fraction: 1.0
       max_workers: 5
-extraction_model_id: claude-opus
+extraction_model_id: mistral-7b
 n_records: 1
 n_failed: 0
 n_any_hallucination: 1

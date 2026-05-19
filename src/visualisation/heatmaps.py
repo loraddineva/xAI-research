@@ -8,6 +8,7 @@ Public API
     plot_model_strategy_heatmap(evals_df, dataset, hallucination_col) -> Figure
     plot_all_datasets_heatmap(evals_df, hallucination_col)            -> Figure
     plot_type_heatmap(evals_df)                                       -> Figure
+    plot_type_strategy_heatmap(evals_df)                              -> Figure
 """
 
 from __future__ import annotations
@@ -56,12 +57,16 @@ def plot_model_strategy_heatmap(
     if dataset:
         df = df[df["dataset"] == dataset]
 
+    from src.visualisation.hallucination_rates import order_strategy_labels, strategy_label
+
     pivot = (
         df.groupby(["model_id", "prompt_strategy"])[hallucination_col]
         .mean()
         .mul(100)
         .unstack("prompt_strategy")
     )
+    pivot.columns = [strategy_label(str(c)) for c in pivot.columns]
+    pivot = pivot[order_strategy_labels(pivot.columns)]
 
     if title is None:
         suffix = f" — {dataset}" if dataset else ""
@@ -101,6 +106,8 @@ def plot_all_datasets_heatmap(
     Side-by-side heatmaps, one per dataset in *evals_df*.
     """
     _set_style()
+    from src.visualisation.hallucination_rates import order_strategy_labels, strategy_label
+
     datasets = sorted(evals_df["dataset"].unique())
     ncols = len(datasets)
 
@@ -116,6 +123,8 @@ def plot_all_datasets_heatmap(
             .mul(100)
             .unstack("prompt_strategy")
         )
+        pivot.columns = [strategy_label(str(c)) for c in pivot.columns]
+        pivot = pivot[order_strategy_labels(pivot.columns)]
         sns.heatmap(
             pivot,
             annot=True,
@@ -189,5 +198,69 @@ def plot_type_heatmap(
     ax.set_title("Hallucination Rate (%) by Model × Type", fontweight="bold", pad=12)
     ax.set_xlabel("Hallucination type")
     ax.set_ylabel("Model")
+    fig.tight_layout()
+    return fig
+
+
+# ---------------------------------------------------------------------------
+# Heatmap 4 — Hallucination type × prompt strategy
+# ---------------------------------------------------------------------------
+
+def plot_type_strategy_heatmap(
+    evals_df: pd.DataFrame,
+    figsize: tuple = (8, 5),
+    cmap: str = "YlOrRd",
+) -> plt.Figure:
+    """
+    Heatmap: rows = hallucination types, columns = prompt strategies.
+    Cell value = proportion of narratives flagged (0–100%).
+    """
+    _set_style()
+    from src.visualisation.hallucination_rates import (
+        HALLUCINATION_TYPES,
+        TYPE_LABELS,
+        order_strategy_labels,
+        strategy_label,
+    )
+
+    if "prompt_strategy" not in evals_df.columns:
+        raise ValueError("evals_df must contain a 'prompt_strategy' column.")
+
+    htypes = [t for t in HALLUCINATION_TYPES if t in evals_df.columns]
+    records = []
+    for htype in htypes:
+        for strategy, grp in evals_df.groupby("prompt_strategy"):
+            records.append({
+                "type": TYPE_LABELS[htype],
+                "strategy": strategy_label(str(strategy)),
+                "rate": grp[htype].mean() * 100,
+            })
+
+    pivot = (
+        pd.DataFrame(records)
+        .pivot(index="type", columns="strategy", values="rate")
+    )
+    pivot = pivot[order_strategy_labels(pivot.columns)]
+
+    fig, ax = plt.subplots(figsize=figsize)
+    sns.heatmap(
+        pivot,
+        annot=True,
+        fmt=".1f",
+        cmap=cmap,
+        vmin=0,
+        vmax=100,
+        linewidths=0.5,
+        linecolor="white",
+        ax=ax,
+        cbar_kws={"label": "Flagged narratives (%)"},
+    )
+    ax.set_title(
+        "Hallucination Rate (%) by Type × Prompt Strategy",
+        fontweight="bold",
+        pad=12,
+    )
+    ax.set_xlabel("Prompt strategy")
+    ax.set_ylabel("Hallucination type")
     fig.tight_layout()
     return fig

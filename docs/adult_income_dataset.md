@@ -282,7 +282,7 @@ Since values in `data/processed/adult.csv` are normalised floats, interpreting t
 
 In this project (Paper 1: LLM Faithfulness in XAI Narratives), the Adult Income dataset serves as one of two evaluation benchmarks. SHAP values are computed for each instance using OpenXAI's pre-trained models (LR and ANN). These ground-truth SHAP values are then:
 
-1. Injected into prompts for three LLMs (Claude Opus, Llama 3 70B, Mistral 7B) to generate natural-language narratives.
-2. Used to evaluate narratives against five hallucination types: sign inversion, rank swap, feature fabrication, magnitude distortion, and omission.
+1. Injected into prompts for Llama 3 70B (via Hugging Face Inference Providers) to generate natural-language narratives.
+2. Used to evaluate narratives via Mistral 7B Instruct v0.3 (Hugging Face Inference Endpoint) against five hallucination types: sign inversion, rank swap, feature fabrication, magnitude distortion, and omission.
 
 The 13 features available in the OpenXAI-processed version (excluding `native_country`) are the features referenced in all generated narratives and evaluations.

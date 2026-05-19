@@ -9,14 +9,11 @@ Usage
 
     cfg = load_config()
     client = LLMClient()
-    text = client.generate(prompt="Explain this.", model_cfg=cfg.get_model("claude-opus"))
+    text = client.generate(prompt="Explain this.", model_cfg=cfg.get_model("llama3-70b"))
 
 Providers
 ---------
-    anthropic   — Anthropic Messages API (claude-*)
-    together    — Together AI Chat Completions (Llama etc.)
-    mistral     — Mistral AI Chat Completions
-    ollama      — Local Ollama HTTP API (stubbed; enable when local server is running)
+    huggingface — Hugging Face Inference Providers / Endpoints via huggingface_hub
 """
 
 from __future__ import annotations
@@ -31,7 +28,7 @@ from tenacity import (
     wait_exponential,
 )
 
-from src.config import ModelConfig
+from src.config import ModelConfig, resolve_model_base_url
 
 # ---------------------------------------------------------------------------
 # Retry policy (shared across all providers)
@@ -42,6 +39,10 @@ _RETRY_KWARGS: dict[str, Any] = dict(
     wait=wait_exponential(multiplier=1, min=2, max=60),
     reraise=True,
 )
+
+
+def _hf_token() -> str | None:
+    return os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN")
 
 
 # ---------------------------------------------------------------------------
@@ -85,10 +86,7 @@ class LLMClient:
         temp = temperature if temperature is not None else model_cfg.temperature
         provider = model_cfg.provider.lower()
         dispatch = {
-            "anthropic": self._generate_anthropic,
-            "together":  self._generate_together,
-            "mistral":   self._generate_mistral,
-            "ollama":    self._generate_ollama,
+            "huggingface": self._generate_huggingface,
         }
         if provider not in dispatch:
             raise ValueError(
@@ -98,119 +96,37 @@ class LLMClient:
         return dispatch[provider](prompt, model_cfg, tokens, temp)
 
     # ------------------------------------------------------------------
-    # Anthropic
+    # Hugging Face (Inference Providers / Endpoints)
     # ------------------------------------------------------------------
 
-    def _generate_anthropic(
+    def _generate_huggingface(
         self, prompt: str, model_cfg: ModelConfig, max_tokens: int, temperature: float
     ) -> str:
         try:
-            import anthropic as _anthropic
+            from huggingface_hub import InferenceClient as _InferenceClient
         except ImportError as e:
-            raise ImportError("anthropic package not installed. Run: pip install anthropic") from e
+            raise ImportError(
+                "huggingface_hub package not installed. Run: pip install huggingface_hub"
+            ) from e
 
-        client = _anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+        client_kwargs: dict[str, Any] = {"token": _hf_token()}
+        base_url = resolve_model_base_url(model_cfg)
+        if base_url:
+            client_kwargs["base_url"] = base_url
+        client = _InferenceClient(**client_kwargs)
 
-        @retry(retry=retry_if_exception_type(Exception), **_RETRY_KWARGS)
-        def _call() -> str:
-            message = client.messages.create(
-                model=model_cfg.model_name,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            return message.content[0].text.strip()
-
-        return _call()
-
-    # ------------------------------------------------------------------
-    # Together AI
-    # ------------------------------------------------------------------
-
-    def _generate_together(
-        self, prompt: str, model_cfg: ModelConfig, max_tokens: int, temperature: float
-    ) -> str:
-        try:
-            from together import Together as _Together
-        except ImportError as e:
-            raise ImportError("together package not installed. Run: pip install together") from e
-
-        client = _Together(api_key=os.environ.get("TOGETHER_API_KEY"))
-
-        @retry(retry=retry_if_exception_type(Exception), **_RETRY_KWARGS)
-        def _call() -> str:
-            response = client.chat.completions.create(
-                model=model_cfg.model_name,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            return response.choices[0].message.content.strip()
-
-        return _call()
-
-    # ------------------------------------------------------------------
-    # Mistral
-    # ------------------------------------------------------------------
-
-    def _generate_mistral(
-        self, prompt: str, model_cfg: ModelConfig, max_tokens: int, temperature: float
-    ) -> str:
-        try:
-            from mistralai.client import Mistral as _Mistral
-        except ImportError as e:
-            raise ImportError("mistralai package not installed. Run: pip install mistralai") from e
-
-        client = _Mistral(api_key=os.environ.get("MISTRAL_API_KEY"))
-
-        @retry(retry=retry_if_exception_type(Exception), **_RETRY_KWARGS)
-        def _call() -> str:
-            response = client.chat.complete(
-                model=model_cfg.model_name,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            return response.choices[0].message.content.strip()
-
-        return _call()
-
-    # ------------------------------------------------------------------
-    # Ollama (local)
-    # ------------------------------------------------------------------
-
-    def _generate_ollama(
-        self, prompt: str, model_cfg: ModelConfig, max_tokens: int, temperature: float
-    ) -> str:
-        """
-        Calls the local Ollama REST API.
-        Set base_url in the model config (default: http://localhost:11434).
-        """
-        import json
-        import urllib.request
-
-        base_url = (model_cfg.base_url or "http://localhost:11434").rstrip("/")
-        url = f"{base_url}/api/chat"
-
-        payload = json.dumps({
+        completion_kwargs: dict[str, Any] = {
             "model": model_cfg.model_name,
             "messages": [{"role": "user", "content": prompt}],
-            "stream": False,
-            "options": {
-                "temperature": temperature,
-                "num_predict": max_tokens,
-            },
-        }).encode("utf-8")
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        }
+        if model_cfg.inference_provider:
+            completion_kwargs["provider"] = model_cfg.inference_provider
 
         @retry(retry=retry_if_exception_type(Exception), **_RETRY_KWARGS)
         def _call() -> str:
-            req = urllib.request.Request(
-                url,
-                data=payload,
-                headers={"Content-Type": "application/json"},
-            )
-            with urllib.request.urlopen(req, timeout=120) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-            return data["message"]["content"].strip()
+            response = client.chat_completion(**completion_kwargs)
+            return response.choices[0].message.content.strip()
 
         return _call()

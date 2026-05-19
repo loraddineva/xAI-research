@@ -11,6 +11,17 @@ The narrative may only refer to features from this list (use these exact names a
 
 {{ feature_names_list }}
 
+## Inverted-indicator features (Adult)
+
+Some columns are named for the **positive** class of a binary indicator (`1` = condition in the name). Natural language often describes the **opposite** state. Map prose to the correct key and set `sign` from the narrative's claimed **effect on income**, not from the word "Non-" in the column name.
+
+| Feature key | `value` 0 in data | `value` 1 in data | Map prose |
+|-------------|-------------------|-------------------|-----------|
+| `marital_status_Non_Married` | Married | Non-married | "married", "wife", "husband (in marriage)" → this key |
+| `relationship_Non_Husband` | Husband | Non-husband (e.g. Wife) | "husband" → this key; "wife" / "non-husband" → this key |
+
+Examples: a **married** man → include `marital_status_Non_Married` if marriage is discussed; do **not** treat him as "non-married". A **husband** → include `relationship_Non_Husband` if that role is discussed; do **not** confuse with marital status alone.
+
 ## Narrative to analyse
 
 {{ narrative_text }}
@@ -21,12 +32,13 @@ The narrative may only refer to features from this list (use these exact names a
 2. For each such feature, extract:
    - `exists`: always `true` if you include the feature
    - `rank`: integer importance order **as implied by the narrative** (0 = most important)
-   - `sign`: `1` if the narrative says the feature pushes toward the positive class, `-1` if toward the negative class
+   - `sign`: **must be exactly** `1` or `-1` (JSON integers). Use `1` if the narrative says the feature pushes toward the positive class (`{{ positive_class_label }}`), `-1` if toward the negative class (`{{ negative_class_label }}`). Never use `0`, `null`, or other values. If the narrative mentions a feature but does not state a clear directional effect, **omit that feature** from `features` (do not include it with a neutral sign).
    - `value`: the instance feature value if the narrative states it explicitly; otherwise `null`
    - `assumption`: one sentence summarising the causal explanation the narrative gives for that direction (e.g. "Higher education increases predicted income")
 3. List any feature-like names mentioned in the narrative that are **not** in the valid feature list under `unknown_features`.
-4. Do **not** include entries for features the narrative does not mention.
+4. Do **not** include entries for features the narrative does not mention (do not list them with `"exists": false` or `"sign": null`).
 5. Do **not** invent or infer features that are absent from the narrative.
+6. Every feature in `features` must have integer `rank` ≥ 0, integer `sign` ∈ {1, -1}, and a non-empty `assumption`.
 
 Return **only** valid JSON with this structure (no markdown fences, no commentary):
 

@@ -54,7 +54,12 @@ def parse_args() -> argparse.Namespace:
         "--subsample",
         type=float,
         default=None,
-        help="Fraction of narratives to check (e.g. 0.1 for 10%% calibration).",
+        help="Fraction of successful evaluations to check (default: config, 0.1).",
+    )
+    parser.add_argument(
+        "--no-balanced",
+        action="store_true",
+        help="Disable equal Martens / chain_of_thought subsampling.",
     )
     return parser.parse_args()
 
@@ -68,6 +73,7 @@ def main() -> None:
         dry_run=args.dry_run,
         n_limit=args.n,
         subsample_fraction=args.subsample,
+        balanced_subsample=False if args.no_balanced else None,
     )
 
 

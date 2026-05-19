@@ -14,7 +14,7 @@ from typing import Dict, List, Optional
 import pandas as pd
 from tqdm import tqdm
 
-from src.config import AppConfig
+from src.config import AppConfig, validate_extraction_model
 from src.data_loader import get_feature_columns, load_dataset
 from src.evaluation.compare_to_shap import compare_to_shap
 from src.evaluation.exporters import (
@@ -50,7 +50,7 @@ def _now_iso() -> str:
 
 def _feature_names_for_dataset(cfg: AppConfig, dataset_name: str) -> List[str]:
     dataset_cfg = cfg.get_dataset(dataset_name)
-    df = load_dataset(dataset_cfg)
+    df = load_dataset(dataset_cfg, sample=False)
     prefix = dataset_cfg.shap_col_prefix
     return [
         c
@@ -100,6 +100,8 @@ def run_evaluation(
     metadata_path = eval_metadata_path(eval_dir)
 
     extraction_model = cfg.get_model(cfg.evaluation.extraction_model_id)
+    if not dry_run:
+        validate_extraction_model(extraction_model)
     feature_names_cache: Dict[str, List[str]] = {}
 
     if not dry_run:

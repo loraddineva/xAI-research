@@ -1,0 +1,2 @@
+narrative_id,extraction_json,parse_error,robustness_json
+n1,"{""features"": {""age"": {""exists"": true, ""rank"": 0, ""sign"": 1, ""value"": null, ""assumption"": ""Age increases income.""}}, ""unknown_features"": []}",,"{""n_successful_runs"": 5, ""n_requested_runs"": 5, ""per_feature"": {""age"": {""sign_agreement"": 1.0, ""value_agreement"": null}}, ""top_k_set_agreement"": null, ""narrative_reliability_score"": 1.0, ""flagged_low_reliability"": false, ""extraction_unreliable"": false}"

@@ -6,6 +6,7 @@ Usage
 -----
     python scripts/export_results.py --run-id <run_id>
     python scripts/export_results.py --run-id <run_id> --figures
+    python scripts/export_results.py --run-id <run_id> --eval-figures
     python scripts/export_results.py --run-id <run_id> --config config/default.yaml
 """
 
@@ -67,7 +68,7 @@ def export_run(
             evaluations_csv_path,
             load_evaluations_csv,
         )
-        from src.visualisation.export import export_all_figures
+        from src.visualisation.export import export_evaluation_figures_complete
 
         eval_dir = eval_run_dir(cfg.evaluation.export_dir, run_id)
         eval_csv = evaluations_csv_path(eval_dir)
@@ -77,10 +78,21 @@ def export_run(
                 f"Run: python scripts/run_evaluation.py --run-id {run_id}"
             )
             sys.exit(1)
+
         evals_df = load_evaluations_csv(eval_csv)
         evals_df = evals_df[evals_df["parse_error"].fillna("").astype(str) == ""]
         print(f"\nEvaluations CSV: {eval_csv} ({len(evals_df)} rows)")
-        export_all_figures(evals_df, cfg, run_id)
+
+        rb_path = eval_dir / "robustness.jsonl"
+        if rb_path.exists():
+            print(f"  Robustness JSONL: {rb_path}")
+        else:
+            print(
+                "  Robustness JSONL: not found — run robustness before eval figures "
+                f"(python scripts/run_robustness.py --run-id {run_id})"
+            )
+
+        export_evaluation_figures_complete(evals_df, cfg, run_id)
         return
 
     if not figures:
@@ -93,7 +105,7 @@ def export_run(
     for dataset_cfg in cfg.datasets:
         if dataset_cfg.name not in narratives_df["dataset"].values:
             continue
-        df = load_dataset(dataset_cfg)
+        df = load_dataset(dataset_cfg, sample=False)
         shap_prefix = dataset_cfg.shap_col_prefix
         shap_cols = [c for c in df.columns if c.startswith(shap_prefix)]
         feature_cols = [
@@ -123,7 +135,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--eval-figures",
         action="store_true",
-        help="Produce hallucination rate figures from a completed evaluation run.",
+        help=(
+            "Produce hallucination + robustness figures from a completed evaluation run "
+            "(filtered high-reliability + unfiltered sensitivity set)."
+        ),
     )
     return parser.parse_args()
 

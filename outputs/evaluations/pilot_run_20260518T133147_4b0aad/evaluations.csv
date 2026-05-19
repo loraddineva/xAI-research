@@ -1,0 +1,733 @@
+eval_id,narrative_id,run_id,dataset,instance_id,model_id,prompt_strategy,sign_inversion,rank_swap,feature_fabrication,omission,any_hallucination,notes,extraction_json,unknown_features,extraction_model_id,extraction_provider,extraction_model_name,extraction_prompt,extraction_raw_response,parse_error,evaluated_at,robustness_json
+7e232704-b44d-44b8-bd16-a2de64f84261,070fd4a4-0fca-4580-8c01-ccf43d010786,pilot_run_20260518T133147_4b0aad,adult,3759,llama3-70b,martens,0,0,0,0,0,{},"{""features"": {""age"": {""exists"": true, ""rank"": 0, ""sign"": 1, ""value"": 37, ""assumption"": ""Age approaching middle management territory contributes positively to income potential""}, ""hours_per_week"": {""exists"": true, ""rank"": 1, ""sign"": 1, ""value"": 46, ""assumption"": ""Strong work ethic and dedication to job contribute positively to income potential""}, ""sex_Male"": {""exists"": true, ""rank"": 2, ""sign"": -1, ""value"": null, ""assumption"": ""Male executives or managers in similar positions may not necessarily earn above $50,000""}, ""relationship_Non_Husband"": {""exists"": true, ""rank"": 3, ""sign"": -1, ""value"": null, ""assumption"": ""Husband status may indicate additional family responsibilities that limit earning potential""}, ""workclass_Private"": {""exists"": true, ""rank"": 4, ""sign"": 1, ""value"": null, ""assumption"": ""Working in a private company is associated with higher earning potential""}, ""native_country_US"": {""exists"": true, ""rank"": 5, ""sign"": 1, ""value"": null, ""assumption"": ""Being a US citizen is associated with higher earning potential""}, ""race_White"": {""exists"": true, ""rank"": 6, ""sign"": -1, ""value"": null, ""assumption"": ""Being White is not a strong indicator of high income in this context""}, ""capital_gain"": {""exists"": true, ""rank"": 7, ""sign"": -1, ""value"": 0, ""assumption"": ""Zero capital gain is not a strong indicator of high income""}}, ""unknown_features"": []}",[],mistral-7b,huggingface,mistralai/Mistral-7B-Instruct-v0.3,"You are an information extraction assistant. Your task is to read a natural-language narrative that explains a machine-learning model prediction, and extract structured claims about which dataset features the narrative discusses.
+
+## Dataset and task
+
+Dataset: adult
+Task: predict whether a person's annual income exceeds $50,000, based on demographic and employment data
+
+## Valid feature names
+
+The narrative may only refer to features from this list (use these exact names as JSON keys):
+
+  - age
+  - capital_gain
+  - capital_loss
+  - hours_per_week
+  - sex_Male
+  - workclass_Private
+  - marital_status_Non_Married
+  - occupation_Other
+  - relationship_Non_Husband
+  - race_White
+  - native_country_US
+
+## Inverted-indicator features (Adult)
+
+Some columns are named for the **positive** class of a binary indicator (`1` = condition in the name). Natural language often describes the **opposite** state. Map prose to the correct key and set `sign` from the narrative's claimed **effect on income**, not from the word ""Non-"" in the column name.
+
+| Feature key | `value` 0 in data | `value` 1 in data | Map prose |
+|-------------|-------------------|-------------------|-----------|
+| `marital_status_Non_Married` | Married | Non-married | ""married"", ""wife"", ""husband (in marriage)"" → this key |
+| `relationship_Non_Husband` | Husband | Non-husband (e.g. Wife) | ""husband"" → this key; ""wife"" / ""non-husband"" → this key |
+
+Examples: a **married** man → include `marital_status_Non_Married` if marriage is discussed; do **not** treat him as ""non-married"". A **husband** → include `relationship_Non_Husband` if that role is discussed; do **not** confuse with marital status alone.
+
+## Narrative to analyse
+
+Here's a plausible story as to why the model predicted that this person's annual income is at or below $50,000:
+
+Meet John, a 37-year-old married man who works as an executive or manager in a private company. He's a hard worker, putting in 46 hours a week, which suggests a strong work ethic and dedication to his job. His occupation, being in a main category, also implies a certain level of responsibility and expertise. These factors, combined with his age, which is approaching middle management territory, contribute positively to his income potential. In fact, his hours worked per week and age are the top two features driving the model's prediction towards ""income above $50,000"".
+
+However, there are other factors that counterbalance these positive influences. John's sex, being male, surprisingly has a strong negative impact on the prediction. This might be due to the model learning that, despite being a male in a traditionally high-paying occupation, John's income is not as high as expected. Perhaps the model has seen patterns of male executives or managers in similar positions who, despite their seniority, are not necessarily earning above $50,000.
+
+Another significant negative contributor is John's relationship status as a husband. This could indicate that the model has learned that husbands, particularly those in their late 30s, may have additional family responsibilities that limit their earning potential or require them to take on lower-paying jobs to achieve a better work-life balance.
+
+The remaining features have smaller, but still notable, influences on the prediction. John's native country being the United States and his workclass being private both contribute slightly positively, suggesting that these factors are associated with higher earning potential. On the other hand, his race being White and his capital gain being zero have small negative effects, which might be due to the model learning that these factors are not strong indicators of high income in this particular context.
+
+In summary, the model predicted that John's annual income is at or below $50,000 because, despite his strong work ethic, occupation, and age, his sex and relationship status as a husband counterbalance these positive factors. The model likely learned that these demographic characteristics are associated with lower earning potential, leading to a final prediction that John's income is below the $50,000 threshold.
+
+## Instructions
+
+1. Identify every feature from the valid list that the narrative **explicitly mentions** (by name or unambiguous synonym).
+2. For each such feature, extract:
+   - `exists`: always `true` if you include the feature
+   - `rank`: integer importance order **as implied by the narrative** (0 = most important)
+   - `sign`: **must be exactly** `1` or `-1` (JSON integers). Use `1` if the narrative says the feature pushes toward the positive class (`income above $50,000`), `-1` if toward the negative class (`income at or below $50,000`). Never use `0`, `null`, or other values. If the narrative mentions a feature but does not state a clear directional effect, **omit that feature** from `features` (do not include it with a neutral sign).
+   - `value`: the instance feature value if the narrative states it explicitly; otherwise `null`
+   - `assumption`: one sentence summarising the causal explanation the narrative gives for that direction (e.g. ""Higher education increases predicted income"")
+3. List any feature-like names mentioned in the narrative that are **not** in the valid feature list under `unknown_features`.
+4. Do **not** include entries for features the narrative does not mention (do not list them with `""exists"": false` or `""sign"": null`).
+5. Do **not** invent or infer features that are absent from the narrative.
+6. Every feature in `features` must have integer `rank` ≥ 0, integer `sign` ∈ {1, -1}, and a non-empty `assumption`.
+
+Return **only** valid JSON with this structure (no markdown fences, no commentary):
+
+{
+  ""features"": {
+    ""<feature_name>"": {
+      ""exists"": true,
+      ""rank"": 0,
+      ""sign"": 1,
+      ""value"": null,
+      ""assumption"": ""...""
+    }
+  },
+  ""unknown_features"": []
+}
+","{
+  ""features"": {
+    ""age"": {
+      ""exists"": true,
+      ""rank"": 0,
+      ""sign"": 1,
+      ""value"": 37,
+      ""assumption"": ""Age approaching middle management territory contributes positively to income potential""
+    },
+    ""hours_per_week"": {
+      ""exists"": true,
+      ""rank"": 1,
+      ""sign"": 1,
+      ""value"": 46,
+      ""assumption"": ""Strong work ethic and dedication to job contribute positively to income potential""
+    },
+    ""sex_Male"": {
+      ""exists"": true,
+      ""rank"": 2,
+      ""sign"": -1,
+      ""value"": null,
+      ""assumption"": ""Male executives or managers in similar positions may not necessarily earn above $50,000""
+    },
+    ""relationship_Non_Husband"": {
+      ""exists"": true,
+      ""rank"": 3,
+      ""sign"": -1,
+      ""value"": null,
+      ""assumption"": ""Husband status may indicate additional family responsibilities that limit earning potential""
+    },
+    ""workclass_Private"": {
+      ""exists"": true,
+      ""rank"": 4,
+      ""sign"": 1,
+      ""value"": null,
+      ""assumption"": ""Working in a private company is associated with higher earning potential""
+    },
+    ""native_country_US"": {
+      ""exists"": true,
+      ""rank"": 5,
+      ""sign"": 1,
+      ""value"": null,
+      ""assumption"": ""Being a US citizen is associated with higher earning potential""
+    },
+    ""race_White"": {
+      ""exists"": true,
+      ""rank"": 6,
+      ""sign"": -1,
+      ""value"": null,
+      ""assumption"": ""Being White is not a strong indicator of high income in this context""
+    },
+    ""capital_gain"": {
+      ""exists"": true,
+      ""rank"": 7,
+      ""sign"": -1,
+      ""value"": 0,
+      ""assumption"": ""Zero capital gain is not a strong indicator of high income""
+    }
+  },
+  ""unknown_features"": []
+}",,2026-05-18T13:35:52.706570+00:00,"{""n_successful_runs"": 3, ""n_requested_runs"": 5, ""per_feature"": {""age"": {""sign_agreement"": 1.0, ""value_agreement"": 1.0}, ""hours_per_week"": {""sign_agreement"": 1.0, ""value_agreement"": 1.0}, ""sex_Male"": {""sign_agreement"": 1.0, ""value_agreement"": null}, ""workclass_Private"": {""sign_agreement"": 1.0, ""value_agreement"": null}, ""native_country_US"": {""sign_agreement"": 1.0, ""value_agreement"": null}, ""race_White"": {""sign_agreement"": 1.0, ""value_agreement"": null}, ""capital_gain"": {""sign_agreement"": 1.0, ""value_agreement"": 1.0}, ""relationship_Non_Husband"": {""sign_agreement"": 1.0, ""value_agreement"": null}}, ""top_k_set_agreement"": 0.6666666666666666, ""narrative_reliability_score"": 0.9629629629629629, ""flagged_low_reliability"": false, ""extraction_unreliable"": false}"
+43dd6e61-c2dd-4c16-9372-cee6f00255ee,a98df9dd-1e4d-4816-a395-0e1da042cea3,pilot_run_20260518T133147_4b0aad,adult,1262,llama3-70b,martens,1,1,0,1,1,"{""sign_inversion"": ""age: narrative sign=-1, SHAP sign=1"", ""rank_swap"": ""Narrative top-3: ['age', 'marital_status_Non_Married', 'sex_Male']; SHAP top-3 by |value|: ['marital_status_Non_Married', 'relationship_Non_Husband', 'sex_Male']"", ""omission"": ""Top-3 SHAP features not mentioned: ['relationship_Non_Husband']""}","{""features"": {""age"": {""exists"": true, ""rank"": 1, ""sign"": -1, ""value"": 19, ""assumption"": ""Young age of 19 pushes toward the negative class (income at or below $50,000)""}, ""sex_Male"": {""exists"": true, ""rank"": 2, ""sign"": 1, ""value"": null, ""assumption"": ""Being a male pushes toward the positive class (income above $50,000), but not enough to exceed $50,000""}, ""marital_status_Non_Married"": {""exists"": true, ""rank"": 3, ""sign"": 1, ""value"": null, ""assumption"": ""Non-married status pushes toward the negative class (income at or below $50,000)""}, ""hours_per_week"": {""exists"": true, ""rank"": 5, ""sign"": -1, ""value"": 40, ""assumption"": ""40 hours of work per week pushes toward the negative class (income at or below $50,000)""}, ""race_White"": {""exists"": true, ""rank"": 6, ""sign"": -1, ""value"": null, ""assumption"": ""Being White pushes toward the negative class (income at or below $50,000)""}, ""occupation_Other"": {""exists"": true, ""rank"": 7, ""sign"": -1, ""value"": null, ""assumption"": ""Occupation being categorized as 'Other' pushes toward the negative class (income at or below $50,000)""}, ""capital_gain"": {""exists"": true, ""rank"": 9, ""sign"": -1, ""value"": null, ""assumption"": ""Lack of capital gains pushes toward the negative class (income at or below $50,000)""}, ""capital_loss"": {""exists"": true, ""rank"": 10, ""sign"": -1, ""value"": null, ""assumption"": ""Lack of capital losses pushes toward the negative class (income at or below $50,000)""}}, ""unknown_features"": []}",[],mistral-7b,huggingface,mistralai/Mistral-7B-Instruct-v0.3,"You are an information extraction assistant. Your task is to read a natural-language narrative that explains a machine-learning model prediction, and extract structured claims about which dataset features the narrative discusses.
+
+## Dataset and task
+
+Dataset: adult
+Task: predict whether a person's annual income exceeds $50,000, based on demographic and employment data
+
+## Valid feature names
+
+The narrative may only refer to features from this list (use these exact names as JSON keys):
+
+  - age
+  - capital_gain
+  - capital_loss
+  - hours_per_week
+  - sex_Male
+  - workclass_Private
+  - marital_status_Non_Married
+  - occupation_Other
+  - relationship_Non_Husband
+  - race_White
+  - native_country_US
+
+## Inverted-indicator features (Adult)
+
+Some columns are named for the **positive** class of a binary indicator (`1` = condition in the name). Natural language often describes the **opposite** state. Map prose to the correct key and set `sign` from the narrative's claimed **effect on income**, not from the word ""Non-"" in the column name.
+
+| Feature key | `value` 0 in data | `value` 1 in data | Map prose |
+|-------------|-------------------|-------------------|-----------|
+| `marital_status_Non_Married` | Married | Non-married | ""married"", ""wife"", ""husband (in marriage)"" → this key |
+| `relationship_Non_Husband` | Husband | Non-husband (e.g. Wife) | ""husband"" → this key; ""wife"" / ""non-husband"" → this key |
+
+Examples: a **married** man → include `marital_status_Non_Married` if marriage is discussed; do **not** treat him as ""non-married"". A **husband** → include `relationship_Non_Husband` if that role is discussed; do **not** confuse with marital status alone.
+
+## Narrative to analyse
+
+Here's a plausible story as to why the model predicted that this person's annual income is at or below $50,000:
+
+Meet John, a 19-year-old male who is not married and has never been married. He works 40 hours a week in a private company, holding a main occupation category job, such as an executive or professional specialty role. He is a US native, White, and has no capital gains or losses.
+
+Despite his promising occupation and work hours, the model predicted that John's income is at or below $50,000. Let's dive into the features that drove this score.
+
+Firstly, John's non-married status and non-husband relationship contributed positively to his income prediction, suggesting that he may not have the financial benefits that come with being married or being a husband. These factors pushed his income prediction upwards, but not enough to exceed $50,000.
+
+On the other hand, John's young age of 19 and being male also contributed positively, albeit to a lesser extent. This could be because the model associates younger males with higher earning potential, but not yet realized.
+
+However, several factors pulled John's income prediction downwards. His 40 hours of work per week, which might be expected to contribute to a higher income, actually had a negative impact. This could be because the model has seen many people in similar occupations and work hours who still earn below $50,000.
+
+John's race, being White, also had a negative contribution, which might be due to the model's understanding of the demographic's income distribution. Additionally, his occupation being categorized as ""Other"" (not in the main categories) had a small negative impact, possibly indicating that the model is less confident in his earning potential.
+
+Lastly, John's lack of capital gains and losses had a negative contribution, which could be because the model associates these financial activities with higher income individuals.
+
+In summary, the model predicted that John's annual income is at or below $50,000 because, despite his promising occupation and work hours, his young age, non-married status, and lack of financial activities (capital gains/losses) outweighed the positive contributions. The model's prediction was driven by a combination of these factors, which ultimately led to a classification of ""income at or below $50,000"".
+
+## Instructions
+
+1. Identify every feature from the valid list that the narrative **explicitly mentions** (by name or unambiguous synonym).
+2. For each such feature, extract:
+   - `exists`: always `true` if you include the feature
+   - `rank`: integer importance order **as implied by the narrative** (0 = most important)
+   - `sign`: **must be exactly** `1` or `-1` (JSON integers). Use `1` if the narrative says the feature pushes toward the positive class (`income above $50,000`), `-1` if toward the negative class (`income at or below $50,000`). Never use `0`, `null`, or other values. If the narrative mentions a feature but does not state a clear directional effect, **omit that feature** from `features` (do not include it with a neutral sign).
+   - `value`: the instance feature value if the narrative states it explicitly; otherwise `null`
+   - `assumption`: one sentence summarising the causal explanation the narrative gives for that direction (e.g. ""Higher education increases predicted income"")
+3. List any feature-like names mentioned in the narrative that are **not** in the valid feature list under `unknown_features`.
+4. Do **not** include entries for features the narrative does not mention (do not list them with `""exists"": false` or `""sign"": null`).
+5. Do **not** invent or infer features that are absent from the narrative.
+6. Every feature in `features` must have integer `rank` ≥ 0, integer `sign` ∈ {1, -1}, and a non-empty `assumption`.
+
+Return **only** valid JSON with this structure (no markdown fences, no commentary):
+
+{
+  ""features"": {
+    ""<feature_name>"": {
+      ""exists"": true,
+      ""rank"": 0,
+      ""sign"": 1,
+      ""value"": null,
+      ""assumption"": ""...""
+    }
+  },
+  ""unknown_features"": []
+}
+","{
+  ""features"": {
+    ""age"": {
+      ""exists"": true,
+      ""rank"": 1,
+      ""sign"": -1,
+      ""value"": 19,
+      ""assumption"": ""Young age of 19 pushes toward the negative class (income at or below $50,000)""
+    },
+    ""sex_Male"": {
+      ""exists"": true,
+      ""rank"": 2,
+      ""sign"": 1,
+      ""value"": null,
+      ""assumption"": ""Being a male pushes toward the positive class (income above $50,000), but not enough to exceed $50,000""
+    },
+    ""marital_status_Non_Married"": {
+      ""exists"": true,
+      ""rank"": 3,
+      ""sign"": 1,
+      ""value"": null,
+      ""assumption"": ""Non-married status pushes toward the negative class (income at or below $50,000)""
+    },
+    ""workclass_Private"": {
+      ""exists"": true,
+      ""rank"": 4,
+      ""sign"": null,
+      ""value"": null,
+      ""assumption"": ""Working in a private company is not explicitly mentioned as having a directional effect on income""
+    },
+    ""hours_per_week"": {
+      ""exists"": true,
+      ""rank"": 5,
+      ""sign"": -1,
+      ""value"": 40,
+      ""assumption"": ""40 hours of work per week pushes toward the negative class (income at or below $50,000)""
+    },
+    ""race_White"": {
+      ""exists"": true,
+      ""rank"": 6,
+      ""sign"": -1,
+      ""value"": null,
+      ""assumption"": ""Being White pushes toward the negative class (income at or below $50,000)""
+    },
+    ""occupation_Other"": {
+      ""exists"": true,
+      ""rank"": 7,
+      ""sign"": -1,
+      ""value"": null,
+      ""assumption"": ""Occupation being categorized as 'Other' pushes toward the negative class (income at or below $50,000)""
+    },
+    ""native_country_US"": {
+      ""exists"": true,
+      ""rank"": 8,
+      ""sign"": null,
+      ""value"": null,
+      ""assumption"": ""Being a US native is not explicitly mentioned as having a directional effect on income""
+    },
+    ""capital_gain"": {
+      ""exists"": true,
+      ""rank"": 9,
+      ""sign"": -1,
+      ""value"": null,
+      ""assumption"": ""Lack of capital gains pushes toward the negative class (income at or below $50,000)""
+    },
+    ""capital_loss"": {
+      ""exists"": true,
+      ""rank"": 10,
+      ""sign"": -1,
+      ""value"": null,
+      ""assumption"": ""Lack of capital losses pushes toward the negative class (income at or below $50,000)""
+    }
+  },
+  ""unknown_features"": []
+}",,2026-05-18T13:36:37.779723+00:00,"{""n_successful_runs"": 5, ""n_requested_runs"": 5, ""per_feature"": {""age"": {""sign_agreement"": 1.0, ""value_agreement"": 1.0}, ""sex_Male"": {""sign_agreement"": 1.0, ""value_agreement"": null}, ""marital_status_Non_Married"": {""sign_agreement"": 0.6, ""value_agreement"": null}, ""relationship_Non_Husband"": {""sign_agreement"": 0.75, ""value_agreement"": null}, ""hours_per_week"": {""sign_agreement"": 1.0, ""value_agreement"": 1.0}, ""occupation_Other"": {""sign_agreement"": 1.0, ""value_agreement"": null}, ""race_White"": {""sign_agreement"": 1.0, ""value_agreement"": null}, ""capital_gain"": {""sign_agreement"": 1.0, ""value_agreement"": null}, ""capital_loss"": {""sign_agreement"": 1.0, ""value_agreement"": null}}, ""top_k_set_agreement"": 0.6, ""narrative_reliability_score"": 0.8949999999999999, ""flagged_low_reliability"": false, ""extraction_unreliable"": false}"
+bbd85196-855a-4817-84f1-aea438c732e2,24e888be-d41b-4988-a8ff-d3211fafbdaf,pilot_run_20260518T133147_4b0aad,adult,5166,llama3-70b,martens,0,0,0,0,0,{},"{""features"": {""age"": {""exists"": true, ""rank"": 3, ""sign"": 1, ""value"": 51, ""assumption"": ""Higher age implies a certain level of experience and seniority in the field""}, ""hours_per_week"": {""exists"": true, ""rank"": 2, ""sign"": 1, ""value"": 48, ""assumption"": ""Working more hours suggests a strong work ethic""}, ""sex_Male"": {""exists"": true, ""rank"": 1, ""sign"": -1, ""value"": null, ""assumption"": ""The model's understanding of the gender pay gap in certain industries""}, ""marital_status_Non_Married"": {""exists"": true, ""rank"": 5, ""sign"": -1, ""value"": null, ""assumption"": ""Married individuals in certain occupations or industries may have lower earning potential due to family responsibilities or other factors""}, ""occupation_Other"": {""exists"": true, ""rank"": 0, ""sign"": -1, ""value"": null, ""assumption"": ""Occupation as a machine operator in the 'other' category is often associated with lower pay scales compared to more specialized or white-collar jobs""}, ""native_country_US"": {""exists"": true, ""rank"": 6, ""sign"": 1, ""value"": null, ""assumption"": ""Being a native of the United States may have contributed to a slightly more favorable outlook, as these demographics are often associated with higher earning potential""}, ""race_White"": {""exists"": true, ""rank"": 7, ""sign"": 1, ""value"": null, ""assumption"": ""Being White may have contributed to a slightly more favorable outlook, as these demographics are often associated with higher earning potential""}}, ""unknown_features"": []}",[],mistral-7b,huggingface,mistralai/Mistral-7B-Instruct-v0.3,"You are an information extraction assistant. Your task is to read a natural-language narrative that explains a machine-learning model prediction, and extract structured claims about which dataset features the narrative discusses.
+
+## Dataset and task
+
+Dataset: adult
+Task: predict whether a person's annual income exceeds $50,000, based on demographic and employment data
+
+## Valid feature names
+
+The narrative may only refer to features from this list (use these exact names as JSON keys):
+
+  - age
+  - capital_gain
+  - capital_loss
+  - hours_per_week
+  - sex_Male
+  - workclass_Private
+  - marital_status_Non_Married
+  - occupation_Other
+  - relationship_Non_Husband
+  - race_White
+  - native_country_US
+
+## Inverted-indicator features (Adult)
+
+Some columns are named for the **positive** class of a binary indicator (`1` = condition in the name). Natural language often describes the **opposite** state. Map prose to the correct key and set `sign` from the narrative's claimed **effect on income**, not from the word ""Non-"" in the column name.
+
+| Feature key | `value` 0 in data | `value` 1 in data | Map prose |
+|-------------|-------------------|-------------------|-----------|
+| `marital_status_Non_Married` | Married | Non-married | ""married"", ""wife"", ""husband (in marriage)"" → this key |
+| `relationship_Non_Husband` | Husband | Non-husband (e.g. Wife) | ""husband"" → this key; ""wife"" / ""non-husband"" → this key |
+
+Examples: a **married** man → include `marital_status_Non_Married` if marriage is discussed; do **not** treat him as ""non-married"". A **husband** → include `relationship_Non_Husband` if that role is discussed; do **not** confuse with marital status alone.
+
+## Narrative to analyse
+
+Here's a plausible story as to why the model predicted that this person's annual income is at or below $50,000:
+
+Meet John, a 51-year-old married man who works as a machine operator in the private sector. He's a hard worker, putting in 48 hours a week, which suggests a strong work ethic. His age, 51, is also a positive factor, as it implies a certain level of experience and seniority in his field. Additionally, being a native of the United States and identifying as White may have contributed to a slightly more favorable outlook, as these demographics are often associated with higher earning potential.
+
+However, despite these positive factors, John's occupation as a machine operator in the ""other"" category, which includes jobs like transportation, handling, and farming, may have dragged his income prediction down. This occupation is often associated with lower pay scales compared to more specialized or white-collar jobs. Furthermore, John's sex, being male, surprisingly had a negative impact on his income prediction, which may be due to the model's understanding of the gender pay gap in certain industries.
+
+The model also took into account John's marital status, which, despite being married, had a negative influence on his income prediction. This could be because the model has learned that married individuals in certain occupations or industries may have lower earning potential due to family responsibilities or other factors. The model also considered John's capital gain and loss, but these had relatively minor impacts on the prediction.
+
+In summary, the model predicted that John's annual income is at or below $50,000 because, despite his strong work ethic, experience, and favorable demographics, his occupation and sex had a significant negative impact on his earning potential. The model's prediction was driven primarily by the large negative SHAP contributions from his occupation and sex, which outweighed the positive contributions from his hours worked, age, and native country.
+
+## Instructions
+
+1. Identify every feature from the valid list that the narrative **explicitly mentions** (by name or unambiguous synonym).
+2. For each such feature, extract:
+   - `exists`: always `true` if you include the feature
+   - `rank`: integer importance order **as implied by the narrative** (0 = most important)
+   - `sign`: **must be exactly** `1` or `-1` (JSON integers). Use `1` if the narrative says the feature pushes toward the positive class (`income above $50,000`), `-1` if toward the negative class (`income at or below $50,000`). Never use `0`, `null`, or other values. If the narrative mentions a feature but does not state a clear directional effect, **omit that feature** from `features` (do not include it with a neutral sign).
+   - `value`: the instance feature value if the narrative states it explicitly; otherwise `null`
+   - `assumption`: one sentence summarising the causal explanation the narrative gives for that direction (e.g. ""Higher education increases predicted income"")
+3. List any feature-like names mentioned in the narrative that are **not** in the valid feature list under `unknown_features`.
+4. Do **not** include entries for features the narrative does not mention (do not list them with `""exists"": false` or `""sign"": null`).
+5. Do **not** invent or infer features that are absent from the narrative.
+6. Every feature in `features` must have integer `rank` ≥ 0, integer `sign` ∈ {1, -1}, and a non-empty `assumption`.
+
+Return **only** valid JSON with this structure (no markdown fences, no commentary):
+
+{
+  ""features"": {
+    ""<feature_name>"": {
+      ""exists"": true,
+      ""rank"": 0,
+      ""sign"": 1,
+      ""value"": null,
+      ""assumption"": ""...""
+    }
+  },
+  ""unknown_features"": []
+}
+","{
+  ""features"": {
+    ""age"": {
+      ""exists"": true,
+      ""rank"": 3,
+      ""sign"": 1,
+      ""value"": 51,
+      ""assumption"": ""Higher age implies a certain level of experience and seniority in the field""
+    },
+    ""hours_per_week"": {
+      ""exists"": true,
+      ""rank"": 2,
+      ""sign"": 1,
+      ""value"": 48,
+      ""assumption"": ""Working more hours suggests a strong work ethic""
+    },
+    ""sex_Male"": {
+      ""exists"": true,
+      ""rank"": 1,
+      ""sign"": -1,
+      ""value"": null,
+      ""assumption"": ""The model's understanding of the gender pay gap in certain industries""
+    },
+    ""workclass_Private"": {
+      ""exists"": true,
+      ""rank"": 4,
+      ""sign"": null,
+      ""value"": null,
+      ""assumption"": ""Not explicitly stated whether being in the private sector has a positive or negative impact on income""
+    },
+    ""marital_status_Non_Married"": {
+      ""exists"": true,
+      ""rank"": 5,
+      ""sign"": -1,
+      ""value"": null,
+      ""assumption"": ""Married individuals in certain occupations or industries may have lower earning potential due to family responsibilities or other factors""
+    },
+    ""occupation_Other"": {
+      ""exists"": true,
+      ""rank"": 0,
+      ""sign"": -1,
+      ""value"": null,
+      ""assumption"": ""Occupation as a machine operator in the 'other' category is often associated with lower pay scales compared to more specialized or white-collar jobs""
+    },
+    ""native_country_US"": {
+      ""exists"": true,
+      ""rank"": 6,
+      ""sign"": 1,
+      ""value"": null,
+      ""assumption"": ""Being a native of the United States may have contributed to a slightly more favorable outlook, as these demographics are often associated with higher earning potential""
+    },
+    ""race_White"": {
+      ""exists"": true,
+      ""rank"": 7,
+      ""sign"": 1,
+      ""value"": null,
+      ""assumption"": ""Being White may have contributed to a slightly more favorable outlook, as these demographics are often associated with higher earning potential""
+    }
+  },
+  ""unknown_features"": []
+}",,2026-05-18T13:37:12.498767+00:00,"{""n_successful_runs"": 5, ""n_requested_runs"": 5, ""per_feature"": {""age"": {""sign_agreement"": 1.0, ""value_agreement"": 1.0}, ""hours_per_week"": {""sign_agreement"": 1.0, ""value_agreement"": 1.0}, ""sex_Male"": {""sign_agreement"": 1.0, ""value_agreement"": null}, ""occupation_Other"": {""sign_agreement"": 1.0, ""value_agreement"": null}, ""race_White"": {""sign_agreement"": 1.0, ""value_agreement"": null}, ""native_country_US"": {""sign_agreement"": 1.0, ""value_agreement"": null}, ""marital_status_Non_Married"": {""sign_agreement"": 1.0, ""value_agreement"": 0.75}}, ""top_k_set_agreement"": 0.4, ""narrative_reliability_score"": 0.925, ""flagged_low_reliability"": false, ""extraction_unreliable"": false}"
+72e6c5a6-b242-46b0-84ca-47c75cc83478,af95e1b3-0ff1-4bae-afd8-08fbfcc03cd0,pilot_run_20260518T133147_4b0aad,adult,2061,llama3-70b,martens,0,1,0,0,1,"{""rank_swap"": ""Narrative top-3: ['age', 'capital_loss', 'hours_per_week']; SHAP top-3 by |value|: ['age', 'capital_loss', 'relationship_Non_Husband']""}","{""features"": {""age"": {""exists"": true, ""rank"": 0, ""sign"": 1, ""value"": 50, ""assumption"": ""At 50, Jane is likely at a senior position in her career, which often comes with higher salaries and benefits.""}, ""capital_loss"": {""exists"": true, ""rank"": 1, ""sign"": 1, ""value"": -2415, ""assumption"": ""The model may be interpreting Jane's capital loss as a sign of investment activity, which is often associated with higher-income individuals.""}, ""hours_per_week"": {""exists"": true, ""rank"": 2, ""sign"": 1, ""value"": 20, ""assumption"": ""Jane's hard work and putting in 20 hours a week is a significant contributor to her high income potential.""}, ""occupation_Other"": {""exists"": true, ""rank"": 3, ""sign"": 1, ""value"": null, ""assumption"": ""Jane's occupation as an executive, which falls under the main occupation category, also suggests a higher earning capacity.""}, ""relationship_Non_Husband"": {""exists"": true, ""rank"": 4, ""sign"": -1, ""value"": null, ""assumption"": ""The model may be accounting for the possibility that Jane's income is influenced by her spouse's income or that she may have more family responsibilities that could impact her earning potential.""}, ""workclass_Private"": {""exists"": true, ""rank"": 5, ""sign"": -1, ""value"": null, ""assumption"": ""The model may be adjusting for potential biases in the data or recognizing that private workclass doesn't necessarily guarantee a high income.""}, ""marital_status_Non_Married"": {""exists"": true, ""rank"": 6, ""sign"": -1, ""value"": null, ""assumption"": ""Jane's relationship status as a non-husband (in this case, a wife) has a negative SHAP value, suggesting that the model may be accounting for the possibility that her income is influenced by her spouse's income or that she may have more family responsibilities that could impact her earning potential.""}, ""race_White"": {""exists"": true, ""rank"": 7, ""sign"": -1, ""value"": null, ""assumption"": ""The model may be adjusting for potential biases in the data or recognizing that this demographic characteristic doesn't necessarily guarantee a high income.""}}, ""unknown_features"": []}",[],mistral-7b,huggingface,mistralai/Mistral-7B-Instruct-v0.3,"You are an information extraction assistant. Your task is to read a natural-language narrative that explains a machine-learning model prediction, and extract structured claims about which dataset features the narrative discusses.
+
+## Dataset and task
+
+Dataset: adult
+Task: predict whether a person's annual income exceeds $50,000, based on demographic and employment data
+
+## Valid feature names
+
+The narrative may only refer to features from this list (use these exact names as JSON keys):
+
+  - age
+  - capital_gain
+  - capital_loss
+  - hours_per_week
+  - sex_Male
+  - workclass_Private
+  - marital_status_Non_Married
+  - occupation_Other
+  - relationship_Non_Husband
+  - race_White
+  - native_country_US
+
+## Inverted-indicator features (Adult)
+
+Some columns are named for the **positive** class of a binary indicator (`1` = condition in the name). Natural language often describes the **opposite** state. Map prose to the correct key and set `sign` from the narrative's claimed **effect on income**, not from the word ""Non-"" in the column name.
+
+| Feature key | `value` 0 in data | `value` 1 in data | Map prose |
+|-------------|-------------------|-------------------|-----------|
+| `marital_status_Non_Married` | Married | Non-married | ""married"", ""wife"", ""husband (in marriage)"" → this key |
+| `relationship_Non_Husband` | Husband | Non-husband (e.g. Wife) | ""husband"" → this key; ""wife"" / ""non-husband"" → this key |
+
+Examples: a **married** man → include `marital_status_Non_Married` if marriage is discussed; do **not** treat him as ""non-married"". A **husband** → include `relationship_Non_Husband` if that role is discussed; do **not** confuse with marital status alone.
+
+## Narrative to analyse
+
+Here's a plausible story as to why the model predicted that this person's annual income exceeds $50,000:
+
+Meet Jane, a 50-year-old married woman who works as an executive in a private company in the United States. She's a hard worker, putting in 20 hours a week, which is a significant contributor to her high income potential. Her occupation as an executive, which falls under the main occupation category, also suggests a higher earning capacity. The model recognizes this and assigns a positive SHAP value to her occupation.
+
+Another significant factor driving the model's prediction is Jane's capital loss of $2415. While this might seem counterintuitive, the model may be interpreting this as a sign of investment activity, which is often associated with higher-income individuals. The positive SHAP value for capital loss suggests that the model views this as a indicator of Jane's financial sophistication and ability to manage her investments, which in turn increases her likelihood of earning above $50,000.
+
+Jane's age, 50, is also a contributing factor to the model's prediction. At this stage in her life, she's likely reached a senior position in her career, which often comes with higher salaries and benefits. The model recognizes this and assigns a positive SHAP value to her age.
+
+On the other hand, some features are pushing against the prediction of ""income above $50,000"". For instance, Jane's relationship status as a non-husband (in this case, a wife) has a negative SHAP value, suggesting that the model may be accounting for the possibility that her income is influenced by her spouse's income or that she may have more family responsibilities that could impact her earning potential.
+
+Similarly, Jane's race (White) and workclass (Private) have negative SHAP values, which may indicate that the model is adjusting for potential biases in the data or recognizing that these demographic characteristics don't necessarily guarantee a high income.
+
+In summary, the model predicted that Jane's annual income exceeds $50,000 due to her high-income occupation, significant capital loss (interpreted as a sign of investment activity), and senior age. While some features, such as her relationship status, race, and workclass, may have pushed against this prediction, the model ultimately concluded that Jane's income is likely above $50,000 based on the cumulative effect of these factors.
+
+## Instructions
+
+1. Identify every feature from the valid list that the narrative **explicitly mentions** (by name or unambiguous synonym).
+2. For each such feature, extract:
+   - `exists`: always `true` if you include the feature
+   - `rank`: integer importance order **as implied by the narrative** (0 = most important)
+   - `sign`: **must be exactly** `1` or `-1` (JSON integers). Use `1` if the narrative says the feature pushes toward the positive class (`income above $50,000`), `-1` if toward the negative class (`income at or below $50,000`). Never use `0`, `null`, or other values. If the narrative mentions a feature but does not state a clear directional effect, **omit that feature** from `features` (do not include it with a neutral sign).
+   - `value`: the instance feature value if the narrative states it explicitly; otherwise `null`
+   - `assumption`: one sentence summarising the causal explanation the narrative gives for that direction (e.g. ""Higher education increases predicted income"")
+3. List any feature-like names mentioned in the narrative that are **not** in the valid feature list under `unknown_features`.
+4. Do **not** include entries for features the narrative does not mention (do not list them with `""exists"": false` or `""sign"": null`).
+5. Do **not** invent or infer features that are absent from the narrative.
+6. Every feature in `features` must have integer `rank` ≥ 0, integer `sign` ∈ {1, -1}, and a non-empty `assumption`.
+
+Return **only** valid JSON with this structure (no markdown fences, no commentary):
+
+{
+  ""features"": {
+    ""<feature_name>"": {
+      ""exists"": true,
+      ""rank"": 0,
+      ""sign"": 1,
+      ""value"": null,
+      ""assumption"": ""...""
+    }
+  },
+  ""unknown_features"": []
+}
+","{
+  ""features"": {
+    ""age"": {
+      ""exists"": true,
+      ""rank"": 0,
+      ""sign"": 1,
+      ""value"": 50,
+      ""assumption"": ""At 50, Jane is likely at a senior position in her career, which often comes with higher salaries and benefits.""
+    },
+    ""capital_loss"": {
+      ""exists"": true,
+      ""rank"": 1,
+      ""sign"": 1,
+      ""value"": -2415,
+      ""assumption"": ""The model may be interpreting Jane's capital loss as a sign of investment activity, which is often associated with higher-income individuals.""
+    },
+    ""hours_per_week"": {
+      ""exists"": true,
+      ""rank"": 2,
+      ""sign"": 1,
+      ""value"": 20,
+      ""assumption"": ""Jane's hard work and putting in 20 hours a week is a significant contributor to her high income potential.""
+    },
+    ""occupation_Other"": {
+      ""exists"": true,
+      ""rank"": 3,
+      ""sign"": 1,
+      ""value"": null,
+      ""assumption"": ""Jane's occupation as an executive, which falls under the main occupation category, also suggests a higher earning capacity.""
+    },
+    ""relationship_Non_Husband"": {
+      ""exists"": true,
+      ""rank"": 4,
+      ""sign"": -1,
+      ""value"": null,
+      ""assumption"": ""The model may be accounting for the possibility that Jane's income is influenced by her spouse's income or that she may have more family responsibilities that could impact her earning potential.""
+    },
+    ""sex_Male"": {
+      ""exists"": false
+    },
+    ""workclass_Private"": {
+      ""exists"": true,
+      ""rank"": 5,
+      ""sign"": -1,
+      ""value"": null,
+      ""assumption"": ""The model may be adjusting for potential biases in the data or recognizing that private workclass doesn't necessarily guarantee a high income.""
+    },
+    ""marital_status_Non_Married"": {
+      ""exists"": true,
+      ""rank"": 6,
+      ""sign"": -1,
+      ""value"": null,
+      ""assumption"": ""Jane's relationship status as a non-husband (in this case, a wife) has a negative SHAP value, suggesting that the model may be accounting for the possibility that her income is influenced by her spouse's income or that she may have more family responsibilities that could impact her earning potential.""
+    },
+    ""race_White"": {
+      ""exists"": true,
+      ""rank"": 7,
+      ""sign"": -1,
+      ""value"": null,
+      ""assumption"": ""The model may be adjusting for potential biases in the data or recognizing that this demographic characteristic doesn't necessarily guarantee a high income.""
+    },
+    ""native_country_US"": {
+      ""exists"": false
+    }
+  },
+  ""unknown_features"": []
+}",,2026-05-18T13:37:55.047761+00:00,"{""n_successful_runs"": 5, ""n_requested_runs"": 5, ""per_feature"": {""age"": {""sign_agreement"": 1.0, ""value_agreement"": 1.0}, ""capital_loss"": {""sign_agreement"": 1.0, ""value_agreement"": 1.0}, ""hours_per_week"": {""sign_agreement"": 1.0, ""value_agreement"": 1.0}, ""marital_status_Non_Married"": {""sign_agreement"": 1.0, ""value_agreement"": null}, ""occupation_Other"": {""sign_agreement"": 1.0, ""value_agreement"": null}, ""relationship_Non_Husband"": {""sign_agreement"": 1.0, ""value_agreement"": null}, ""workclass_Private"": {""sign_agreement"": 1.0, ""value_agreement"": null}, ""race_White"": {""sign_agreement"": 1.0, ""value_agreement"": null}}, ""top_k_set_agreement"": 1.0, ""narrative_reliability_score"": 1.0, ""flagged_low_reliability"": false, ""extraction_unreliable"": false}"
+e71ee9ed-06c7-4965-8e27-b425cef49cfb,0d348307-bc00-4b9f-9ce5-b180e0d3f947,pilot_run_20260518T133147_4b0aad,adult,3100,llama3-70b,martens,0,1,0,1,1,"{""rank_swap"": ""Narrative top-3: ['age', 'marital_status_Non_Married', 'occupation_Other']; SHAP top-3 by |value|: ['hours_per_week', 'occupation_Other', 'sex_Male']"", ""omission"": ""Top-3 SHAP features not mentioned: ['hours_per_week']""}","{""features"": {""age"": {""exists"": true, ""rank"": 2, ""sign"": -1, ""value"": 36, ""assumption"": ""Age of 36 may limit John's earning potential""}, ""capital_gain"": {""exists"": true, ""rank"": 5, ""sign"": -1, ""value"": null, ""assumption"": ""John has no capital gains, which may limit his income""}, ""capital_loss"": {""exists"": true, ""rank"": 6, ""sign"": -1, ""value"": null, ""assumption"": ""John has no capital losses, which may limit his income""}, ""sex_Male"": {""exists"": true, ""rank"": 3, ""sign"": 1, ""value"": null, ""assumption"": ""John is a male, which pushes the prediction towards a higher income""}, ""workclass_Private"": {""exists"": true, ""rank"": 4, ""sign"": 1, ""value"": null, ""assumption"": ""John works in the private sector, which generally associates with higher incomes""}, ""marital_status_Non_Married"": {""exists"": true, ""rank"": 0, ""sign"": -1, ""value"": null, ""assumption"": ""Being married has a small negative contribution to the prediction, possibly because the model has learned that married individuals in this dataset may have more family responsibilities and therefore lower incomes""}, ""relationship_Non_Husband"": {""exists"": true, ""rank"": 5, ""sign"": -1, ""value"": null, ""assumption"": ""John's non-husband relationship status has a small negative contribution to the prediction""}, ""occupation_Other"": {""exists"": true, ""rank"": 1, ""sign"": 1, ""value"": null, ""assumption"": ""John's occupation as a machine operator contributes positively to the prediction, but not as much as other factors""}, ""race_White"": {""exists"": true, ""rank"": 4, ""sign"": -1, ""value"": null, ""assumption"": ""Being white has a negative contribution to the prediction, suggesting that the model has learned that there are many Americans who do not earn high incomes""}, ""native_country_US"": {""exists"": true, ""rank"": 3, ""sign"": -1, ""value"": null, ""assumption"": ""Being from the United States, which is often associated with higher incomes, has a negative SHAP value, suggesting that the model has learned that there are many Americans who do not earn high incomes""}}, ""unknown_features"": []}",[],mistral-7b,huggingface,mistralai/Mistral-7B-Instruct-v0.3,"You are an information extraction assistant. Your task is to read a natural-language narrative that explains a machine-learning model prediction, and extract structured claims about which dataset features the narrative discusses.
+
+## Dataset and task
+
+Dataset: adult
+Task: predict whether a person's annual income exceeds $50,000, based on demographic and employment data
+
+## Valid feature names
+
+The narrative may only refer to features from this list (use these exact names as JSON keys):
+
+  - age
+  - capital_gain
+  - capital_loss
+  - hours_per_week
+  - sex_Male
+  - workclass_Private
+  - marital_status_Non_Married
+  - occupation_Other
+  - relationship_Non_Husband
+  - race_White
+  - native_country_US
+
+## Inverted-indicator features (Adult)
+
+Some columns are named for the **positive** class of a binary indicator (`1` = condition in the name). Natural language often describes the **opposite** state. Map prose to the correct key and set `sign` from the narrative's claimed **effect on income**, not from the word ""Non-"" in the column name.
+
+| Feature key | `value` 0 in data | `value` 1 in data | Map prose |
+|-------------|-------------------|-------------------|-----------|
+| `marital_status_Non_Married` | Married | Non-married | ""married"", ""wife"", ""husband (in marriage)"" → this key |
+| `relationship_Non_Husband` | Husband | Non-husband (e.g. Wife) | ""husband"" → this key; ""wife"" / ""non-husband"" → this key |
+
+Examples: a **married** man → include `marital_status_Non_Married` if marriage is discussed; do **not** treat him as ""non-married"". A **husband** → include `relationship_Non_Husband` if that role is discussed; do **not** confuse with marital status alone.
+
+## Narrative to analyse
+
+Here's a plausible story as to why the model predicted that this person's annual income is at or below $50,000:
+
+Meet John, a 36-year-old married man who works as a machine operator in the private sector. He's a hard worker, putting in 50 hours a week, and has a strong family background, being a husband and a white male. These factors, one would think, would contribute to a higher income. And indeed, the model acknowledges this, with the ""sex_Male"" feature pushing the prediction towards ""income above $50,000"" with a SHAP value of +0.1821, and the ""occupation_Other"" feature, which includes machine operators, also contributing positively with a SHAP value of +0.1557.
+
+However, there are other factors at play that ultimately led the model to predict a lower income. Despite his long working hours, John's occupation is not one of the more lucrative ones, which might limit his earning potential. Additionally, his private sector workclass, while generally associated with higher incomes, only has a small positive contribution to the prediction (+0.0218). This suggests that the model has learned that not all private sector jobs are created equal, and John's specific occupation may not be as well-paying as others.
+
+On the other hand, John's demographic characteristics, such as his age, marital status, and native country, all have negative SHAP values, indicating that they push the prediction towards ""income at or below $50,000"". His age of 36, while not particularly old, may be seen as a factor that limits his earning potential, as he may not have yet reached the peak of his career. Being married, which one might expect to be a positive factor, actually has a small negative contribution (-0.0096), possibly because the model has learned that married individuals in this dataset may have more family responsibilities and therefore lower incomes. Similarly, being from the United States, which is often associated with higher incomes, has a negative SHAP value (-0.0404), suggesting that the model has learned that there are many Americans who do not earn high incomes.
+
+Finally, John's lack of capital gains or losses, as well as his non-husband relationship status (which is a bit puzzling, given that he's married!), all have small negative contributions to the prediction.
+
+In summary, while John has some characteristics that would suggest a higher income, such as his sex, occupation, and workclass, these are outweighed by the negative contributions from his demographic characteristics, occupation, and lack of capital gains or losses. As a result, the model predicts that his annual income is at or below $50,000, with a probability of only 34%.
+
+## Instructions
+
+1. Identify every feature from the valid list that the narrative **explicitly mentions** (by name or unambiguous synonym).
+2. For each such feature, extract:
+   - `exists`: always `true` if you include the feature
+   - `rank`: integer importance order **as implied by the narrative** (0 = most important)
+   - `sign`: **must be exactly** `1` or `-1` (JSON integers). Use `1` if the narrative says the feature pushes toward the positive class (`income above $50,000`), `-1` if toward the negative class (`income at or below $50,000`). Never use `0`, `null`, or other values. If the narrative mentions a feature but does not state a clear directional effect, **omit that feature** from `features` (do not include it with a neutral sign).
+   - `value`: the instance feature value if the narrative states it explicitly; otherwise `null`
+   - `assumption`: one sentence summarising the causal explanation the narrative gives for that direction (e.g. ""Higher education increases predicted income"")
+3. List any feature-like names mentioned in the narrative that are **not** in the valid feature list under `unknown_features`.
+4. Do **not** include entries for features the narrative does not mention (do not list them with `""exists"": false` or `""sign"": null`).
+5. Do **not** invent or infer features that are absent from the narrative.
+6. Every feature in `features` must have integer `rank` ≥ 0, integer `sign` ∈ {1, -1}, and a non-empty `assumption`.
+
+Return **only** valid JSON with this structure (no markdown fences, no commentary):
+
+{
+  ""features"": {
+    ""<feature_name>"": {
+      ""exists"": true,
+      ""rank"": 0,
+      ""sign"": 1,
+      ""value"": null,
+      ""assumption"": ""...""
+    }
+  },
+  ""unknown_features"": []
+}
+","{
+  ""features"": {
+    ""age"": {
+      ""exists"": true,
+      ""rank"": 2,
+      ""sign"": -1,
+      ""value"": 36,
+      ""assumption"": ""Age of 36 may limit John's earning potential""
+    },
+    ""capital_gain"": {
+      ""exists"": true,
+      ""rank"": 5,
+      ""sign"": -1,
+      ""value"": null,
+      ""assumption"": ""John has no capital gains, which may limit his income""
+    },
+    ""capital_loss"": {
+      ""exists"": true,
+      ""rank"": 6,
+      ""sign"": -1,
+      ""value"": null,
+      ""assumption"": ""John has no capital losses, which may limit his income""
+    },
+    ""hours_per_week"": {
+      ""exists"": true,
+      ""rank"": 1,
+      ""sign"": null,
+      ""value"": 50,
+      ""assumption"": ""John works 50 hours a week, but his occupation may not be as lucrative""
+    },
+    ""sex_Male"": {
+      ""exists"": true,
+      ""rank"": 3,
+      ""sign"": 1,
+      ""value"": null,
+      ""assumption"": ""John is a male, which pushes the prediction towards a higher income""
+    },
+    ""workclass_Private"": {
+      ""exists"": true,
+      ""rank"": 4,
+      ""sign"": 1,
+      ""value"": null,
+      ""assumption"": ""John works in the private sector, which generally associates with higher incomes""
+    },
+    ""marital_status_Non_Married"": {
+      ""exists"": true,
+      ""rank"": 0,
+      ""sign"": -1,
+      ""value"": null,
+      ""assumption"": ""Being married has a small negative contribution to the prediction, possibly because the model has learned that married individuals in this dataset may have more family responsibilities and therefore lower incomes""
+    },
+    ""relationship_Non_Husband"": {
+      ""exists"": true,
+      ""rank"": 5,
+      ""sign"": -1,
+      ""value"": null,
+      ""assumption"": ""John's non-husband relationship status has a small negative contribution to the prediction""
+    },
+    ""occupation_Other"": {
+      ""exists"": true,
+      ""rank"": 1,
+      ""sign"": 1,
+      ""value"": null,
+      ""assumption"": ""John's occupation as a machine operator contributes positively to the prediction, but not as much as other factors""
+    },
+    ""race_White"": {
+      ""exists"": true,
+      ""rank"": 4,
+      ""sign"": -1,
+      ""value"": null,
+      ""assumption"": ""Being white has a negative contribution to the prediction, suggesting that the model has learned that there are many Americans who do not earn high incomes""
+    },
+    ""native_country_US"": {
+      ""exists"": true,
+      ""rank"": 3,
+      ""sign"": -1,
+      ""value"": null,
+      ""assumption"": ""Being from the United States, which is often associated with higher incomes, has a negative SHAP value, suggesting that the model has learned that there are many Americans who do not earn high incomes""
+    }
+  },
+  ""unknown_features"": []
+}",,2026-05-18T13:38:42.473654+00:00,"{""n_successful_runs"": 3, ""n_requested_runs"": 5, ""per_feature"": {""age"": {""sign_agreement"": 1.0, ""value_agreement"": 1.0}, ""capital_gain"": {""sign_agreement"": 1.0, ""value_agreement"": null}, ""capital_loss"": {""sign_agreement"": 1.0, ""value_agreement"": null}, ""sex_Male"": {""sign_agreement"": 1.0, ""value_agreement"": null}, ""workclass_Private"": {""sign_agreement"": 1.0, ""value_agreement"": null}, ""marital_status_Non_Married"": {""sign_agreement"": 1.0, ""value_agreement"": 0.6666666666666666}, ""occupation_Other"": {""sign_agreement"": 1.0, ""value_agreement"": null}, ""relationship_Non_Husband"": {""sign_agreement"": 1.0, ""value_agreement"": null}, ""race_White"": {""sign_agreement"": 0.6666666666666666, ""value_agreement"": null}, ""native_country_US"": {""sign_agreement"": 1.0, ""value_agreement"": null}}, ""top_k_set_agreement"": 0.3333333333333333, ""narrative_reliability_score"": 0.9090909090909091, ""flagged_low_reliability"": false, ""extraction_unreliable"": false}"

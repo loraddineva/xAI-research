@@ -132,7 +132,10 @@ def run_generation(
     else:
         print(f"Output dir: {run_dir}")
 
-    models = [m for m in cfg.models if filter_model is None or m.id == filter_model]
+    models = [
+        m for m in cfg.generation_models()
+        if filter_model is None or m.id == filter_model
+    ]
     datasets = [d for d in cfg.datasets if filter_dataset is None or d.name == filter_dataset]
     strategies = [
         s for s in cfg.prompt.strategies
@@ -159,9 +162,11 @@ def run_generation(
 
     with tqdm(total=total, desc="Generating narratives") as pbar:
         for dataset_cfg in datasets:
-            df = load_dataset(dataset_cfg)
-            n = min(n_override, len(df)) if n_override is not None else len(df)
-            df = df.iloc[:n]
+            df = load_dataset(
+                dataset_cfg,
+                n=n_override,
+                seed=cfg.run.seed,
+            )
 
             for strategy_cfg in strategies:
                 for model_cfg in models:

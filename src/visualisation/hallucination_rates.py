@@ -9,6 +9,7 @@ Public API
     plot_rates_by_model(evals_df)      -> matplotlib.figure.Figure
     plot_rates_by_strategy(evals_df)   -> matplotlib.figure.Figure
     plot_rates_by_dataset(evals_df)    -> matplotlib.figure.Figure
+    plot_type_by_strategy(evals_df)    -> matplotlib.figure.Figure
 """
 
 from __future__ import annotations
@@ -34,7 +35,32 @@ TYPE_LABELS = {
     "omission": "Omission",
 }
 
+# Config / pipeline ids (martens, chain_of_thought) → figure labels
+STRATEGY_DIRECT = "martens"
+STRATEGY_COT = "chain_of_thought"
+
+STRATEGY_LABELS = {
+    STRATEGY_DIRECT: "Direct",
+    STRATEGY_COT: "Chain-of-thought",
+    "direct": "Direct",
+    "cot": "Chain-of-thought",
+}
+
+STRATEGY_DISPLAY_ORDER = ["Direct", "Chain-of-thought"]
+
 _PALETTE = "Set2"
+
+
+def strategy_label(strategy_id: str) -> str:
+    return STRATEGY_LABELS.get(strategy_id, strategy_id)
+
+
+def order_strategy_labels(labels) -> list:
+    """Consistent legend / axis order: Direct, then Chain-of-thought."""
+    label_list = list(labels)
+    ordered = [lbl for lbl in STRATEGY_DISPLAY_ORDER if lbl in label_list]
+    ordered.extend(lbl for lbl in label_list if lbl not in ordered)
+    return ordered
 
 
 def _set_style() -> None:
@@ -150,12 +176,13 @@ def plot_rates_by_strategy(
         .mul(100)
         .reset_index()
         .rename(columns={hallucination_col: "rate"})
-        .sort_values("rate", ascending=False)
     )
+    rates["label"] = rates["prompt_strategy"].map(lambda s: strategy_label(str(s)))
+    rates = rates.set_index("label").loc[order_strategy_labels(rates["label"])].reset_index()
 
     fig, ax = plt.subplots(figsize=figsize)
     bars = ax.bar(
-        rates["prompt_strategy"],
+        rates["label"],
         rates["rate"],
         color=sns.color_palette(_PALETTE, len(rates)),
         edgecolor="white",
@@ -218,7 +245,55 @@ def plot_type_by_model(
 
 
 # ---------------------------------------------------------------------------
-# Plot 5 — Hallucination rate by dataset
+# Plot 5 — Per-type rates grouped by prompt strategy
+# ---------------------------------------------------------------------------
+
+def plot_type_by_strategy(
+    evals_df: pd.DataFrame,
+    title: str = "Hallucination Type Rate by Prompt Strategy",
+    figsize: tuple = (12, 6),
+) -> plt.Figure:
+    """
+    Grouped bar chart: x-axis = hallucination type, hue = prompt strategy.
+    Matches paper Table 5.1 layout.
+    """
+    _set_style()
+    if "prompt_strategy" not in evals_df.columns:
+        raise ValueError("evals_df must contain a 'prompt_strategy' column.")
+
+    records = []
+    for htype in HALLUCINATION_TYPES:
+        if htype not in evals_df.columns:
+            continue
+        for strategy, grp in evals_df.groupby("prompt_strategy"):
+            records.append({
+                "Hallucination type": TYPE_LABELS[htype],
+                "Prompt strategy": strategy_label(str(strategy)),
+                "Rate (%)": grp[htype].mean() * 100,
+            })
+    plot_df = pd.DataFrame(records)
+
+    fig, ax = plt.subplots(figsize=figsize)
+    sns.barplot(
+        data=plot_df,
+        x="Hallucination type",
+        y="Rate (%)",
+        hue="Prompt strategy",
+        hue_order=order_strategy_labels(plot_df["Prompt strategy"].unique()),
+        palette=_PALETTE,
+        ax=ax,
+        edgecolor="white",
+        linewidth=0.6,
+    )
+    ax.set_title(title, fontweight="bold")
+    ax.set_ylim(0, min(100, plot_df["Rate (%)"].max() * 1.3 + 5) if not plot_df.empty else 100)
+    ax.legend(title="Prompt strategy", bbox_to_anchor=(1.01, 1), loc="upper left")
+    fig.tight_layout()
+    return fig
+
+
+# ---------------------------------------------------------------------------
+# Plot 6 — Hallucination rate by dataset
 # ---------------------------------------------------------------------------
 
 def plot_rates_by_dataset(

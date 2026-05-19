@@ -46,6 +46,25 @@ ADULT_CATEGORICAL_MEANINGS: Dict[str, Dict[int, str]] = {
 
 ADULT_CATEGORICAL_FEATURES: Set[str] = set(ADULT_CATEGORICAL_MEANINGS.keys())
 
+# Plain-language column labels for instance snapshots in generation prompts.
+ADULT_FEATURE_LABELS: Dict[str, str] = {
+    "age": "Age (years)",
+    "capital_gain": "Capital gain ($)",
+    "capital_loss": "Capital loss ($)",
+    "hours_per_week": "Hours worked per week",
+    "sex_Male": "Sex",
+    "workclass_Private": "Workclass (private vs other)",
+    "marital_status_Non_Married": "Marital status (non-married vs married)",
+    "occupation_Other": "Occupation (other vs main categories)",
+    "relationship_Non_Husband": "Relationship (non-husband vs husband)",
+    "race_White": "Race (White vs non-White)",
+    "native_country_US": "Native country (US vs other)",
+}
+
+_FEATURE_LABELS: Dict[str, Dict[str, str]] = {
+    "adult": ADULT_FEATURE_LABELS,
+}
+
 _REGISTRY: Dict[str, Dict[str, Dict[int, str]]] = {
     "adult": ADULT_CATEGORICAL_MEANINGS,
 }
@@ -60,6 +79,13 @@ def is_categorical(dataset_name: Optional[str], feature_name: str) -> bool:
     if dataset_name is None:
         return False
     return feature_name in _CATEGORICAL_FEATURES.get(dataset_name, set())
+
+
+def get_feature_label(dataset_name: Optional[str], feature_name: str) -> str:
+    """Human-readable label for a feature column (falls back to feature_name)."""
+    if dataset_name is None:
+        return feature_name
+    return _FEATURE_LABELS.get(dataset_name, {}).get(feature_name, feature_name)
 
 
 def get_categorical_meaning(

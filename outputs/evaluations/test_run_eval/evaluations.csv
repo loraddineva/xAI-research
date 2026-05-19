@@ -1,5 +1,5 @@
 eval_id,narrative_id,run_id,dataset,instance_id,model_id,prompt_strategy,sign_inversion,rank_swap,feature_fabrication,omission,any_hallucination,notes,extraction_json,unknown_features,extraction_model_id,extraction_provider,extraction_model_name,extraction_prompt,extraction_raw_response,parse_error,evaluated_at
-05fe2baa-c3c8-4318-ad31-e473e6bada90,n1,test_run_eval,adult,0,claude-opus,martens,0,0,0,1,1,"{""omission"": ""Top-3 SHAP features not mentioned: ['education', 'hours_per_week']""}","{""features"": {""age"": {""exists"": true, ""rank"": 0, ""sign"": 1, ""value"": null, ""assumption"": ""Older applicants have higher income.""}}, ""unknown_features"": []}",[],claude-opus,anthropic,claude-opus-4-6,"You are an information extraction assistant. Your task is to read a natural-language narrative that explains a machine-learning model prediction, and extract structured claims about which dataset features the narrative discusses.
+0b7507ac-7df4-444a-863c-383806bf168b,n1,test_run_eval,adult,0,llama3-70b,martens,0,0,0,1,1,"{""omission"": ""Top-3 SHAP features not mentioned: ['education', 'hours_per_week']""}","{""features"": {""age"": {""exists"": true, ""rank"": 0, ""sign"": 1, ""value"": null, ""assumption"": ""Older applicants have higher income.""}}, ""unknown_features"": []}",[],mistral-7b,huggingface,mistralai/Mistral-7B-Instruct-v0.3,"You are an information extraction assistant. Your task is to read a natural-language narrative that explains a machine-learning model prediction, and extract structured claims about which dataset features the narrative discusses.
 
 ## Dataset and task
 
@@ -14,6 +14,17 @@ The narrative may only refer to features from this list (use these exact names a
   - education
   - hours_per_week
 
+## Inverted-indicator features (Adult)
+
+Some columns are named for the **positive** class of a binary indicator (`1` = condition in the name). Natural language often describes the **opposite** state. Map prose to the correct key and set `sign` from the narrative's claimed **effect on income**, not from the word ""Non-"" in the column name.
+
+| Feature key | `value` 0 in data | `value` 1 in data | Map prose |
+|-------------|-------------------|-------------------|-----------|
+| `marital_status_Non_Married` | Married | Non-married | ""married"", ""wife"", ""husband (in marriage)"" → this key |
+| `relationship_Non_Husband` | Husband | Non-husband (e.g. Wife) | ""husband"" → this key; ""wife"" / ""non-husband"" → this key |
+
+Examples: a **married** man → include `marital_status_Non_Married` if marriage is discussed; do **not** treat him as ""non-married"". A **husband** → include `relationship_Non_Husband` if that role is discussed; do **not** confuse with marital status alone.
+
 ## Narrative to analyse
 
 Age drove the prediction.
@@ -24,12 +35,13 @@ Age drove the prediction.
 2. For each such feature, extract:
    - `exists`: always `true` if you include the feature
    - `rank`: integer importance order **as implied by the narrative** (0 = most important)
-   - `sign`: `1` if the narrative says the feature pushes toward the positive class, `-1` if toward the negative class
+   - `sign`: **must be exactly** `1` or `-1` (JSON integers). Use `1` if the narrative says the feature pushes toward the positive class (`income above $50,000`), `-1` if toward the negative class (`income at or below $50,000`). Never use `0`, `null`, or other values. If the narrative mentions a feature but does not state a clear directional effect, **omit that feature** from `features` (do not include it with a neutral sign).
    - `value`: the instance feature value if the narrative states it explicitly; otherwise `null`
    - `assumption`: one sentence summarising the causal explanation the narrative gives for that direction (e.g. ""Higher education increases predicted income"")
 3. List any feature-like names mentioned in the narrative that are **not** in the valid feature list under `unknown_features`.
-4. Do **not** include entries for features the narrative does not mention.
+4. Do **not** include entries for features the narrative does not mention (do not list them with `""exists"": false` or `""sign"": null`).
 5. Do **not** invent or infer features that are absent from the narrative.
+6. Every feature in `features` must have integer `rank` ≥ 0, integer `sign` ∈ {1, -1}, and a non-empty `assumption`.
 
 Return **only** valid JSON with this structure (no markdown fences, no commentary):
 
@@ -45,4 +57,4 @@ Return **only** valid JSON with this structure (no markdown fences, no commentar
   },
   ""unknown_features"": []
 }
-","{""features"": {""age"": {""exists"": true, ""rank"": 0, ""sign"": 1, ""value"": null, ""assumption"": ""Older applicants have higher income.""}}, ""unknown_features"": []}",,2026-05-16T08:50:34.246119+00:00
+","{""features"": {""age"": {""exists"": true, ""rank"": 0, ""sign"": 1, ""value"": null, ""assumption"": ""Older applicants have higher income.""}}, ""unknown_features"": []}",,2026-05-18T13:27:26.481958+00:00
