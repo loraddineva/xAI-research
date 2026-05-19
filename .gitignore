@@ -25,11 +25,15 @@ env/
 data/raw/*
 !data/raw/.gitkeep
 
+# Duplicate notebook-local data copies (use data/ at repo root)
+notebooks/data/
+
 # Outputs
 outputs/generation/*
 !outputs/generation/.gitkeep
 outputs/figures/*
 !outputs/figures/.gitkeep
+outputs/results.db
 
 # OS
 .DS_Store

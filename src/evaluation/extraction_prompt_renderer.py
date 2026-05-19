@@ -7,9 +7,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from jinja2 import Environment, FileSystemLoader, StrictUndefined
-
 from src.config import AppConfig, DatasetConfig
+from src.prompts.jinja_env import make_jinja_env
 
 
 class ExtractionPromptRenderer:
@@ -21,11 +20,7 @@ class ExtractionPromptRenderer:
             raise FileNotFoundError(
                 f"Extraction template not found: {template_path.resolve()}"
             )
-        self._env = Environment(
-            loader=FileSystemLoader(str(template_path.parent)),
-            undefined=StrictUndefined,
-            keep_trailing_newline=True,
-        )
+        self._env = make_jinja_env([str(template_path.parent)])
         self._template_name = template_path.name
 
     def render(

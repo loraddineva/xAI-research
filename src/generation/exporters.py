@@ -19,11 +19,19 @@ Public API
 
 from __future__ import annotations
 
-import csv
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Iterable, List, Sequence
+from typing import Any, List, Sequence
+
+from src.storage.record_io import (
+    append_csv_row as _append_csv_row,
+    append_jsonl as _append_jsonl,
+    init_csv as _init_csv,
+    record_row,
+    serialize_cell,
+    write_csv as _write_csv,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -78,14 +86,8 @@ CSV_COLUMNS: List[str] = [
 ]
 
 
-def _serialize_cell(val: Any) -> Any:
-    if isinstance(val, (list, dict)):
-        return json.dumps(val, ensure_ascii=False)
-    return val
-
-
 def _record_row(rec: NarrativeRecord) -> List[Any]:
-    return [_serialize_cell(getattr(rec, col)) for col in CSV_COLUMNS]
+    return record_row(rec, CSV_COLUMNS, serialize_cell)
 
 
 # ---------------------------------------------------------------------------
@@ -121,17 +123,7 @@ def record_to_jsonl_dict(rec: NarrativeRecord) -> dict:
 
 def append_jsonl(path: Path, rec: NarrativeRecord) -> None:
     """Append a single narrative record as one JSONL line."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(record_to_jsonl_dict(rec)) + "\n")
-
-
-def write_jsonl(path: Path, records: Iterable[NarrativeRecord]) -> None:
-    """Write all records to a JSONL file (one record per line)."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as fh:
-        for rec in records:
-            fh.write(json.dumps(record_to_jsonl_dict(rec)) + "\n")
+    _append_jsonl(path, record_to_jsonl_dict(rec))
 
 
 # ---------------------------------------------------------------------------
@@ -140,28 +132,14 @@ def write_jsonl(path: Path, records: Iterable[NarrativeRecord]) -> None:
 
 def init_csv(path: Path) -> None:
     """Create narratives.csv with a header row."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="", encoding="utf-8") as fh:
-        writer = csv.writer(fh)
-        writer.writerow(CSV_COLUMNS)
+    _init_csv(path, CSV_COLUMNS)
 
 
 def append_csv_row(path: Path, rec: NarrativeRecord) -> None:
     """Append one narrative row to the CSV (crash-safe incremental write)."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    write_header = not path.exists() or path.stat().st_size == 0
-    with path.open("a", newline="", encoding="utf-8") as fh:
-        writer = csv.writer(fh)
-        if write_header:
-            writer.writerow(CSV_COLUMNS)
-        writer.writerow(_record_row(rec))
+    _append_csv_row(path, CSV_COLUMNS, _record_row(rec))
 
 
 def write_csv(path: Path, records: Sequence[NarrativeRecord]) -> None:
     """Rewrite the full narratives CSV (includes failed rows)."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="", encoding="utf-8") as fh:
-        writer = csv.writer(fh)
-        writer.writerow(CSV_COLUMNS)
-        for rec in records:
-            writer.writerow(_record_row(rec))
+    _write_csv(path, CSV_COLUMNS, [_record_row(rec) for rec in records])

@@ -5,11 +5,19 @@ Persist evaluation run artefacts to disk.
 
 from __future__ import annotations
 
-import csv
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Iterable, List, Sequence
+from typing import List, Sequence
+
+from src.storage.record_io import (
+    append_csv_row as _append_csv_row,
+    append_jsonl as _append_jsonl,
+    init_csv as _init_csv,
+    record_row,
+    serialize_cell,
+    write_csv as _write_csv,
+)
 
 
 EVAL_CSV_COLUMNS: List[str] = [
@@ -67,14 +75,8 @@ class EvaluationRecord:
         return asdict(self)
 
 
-def _serialize_cell(val: Any) -> Any:
-    if isinstance(val, (list, dict)):
-        return json.dumps(val, ensure_ascii=False)
-    return val
-
-
-def _record_row(rec: EvaluationRecord) -> List[Any]:
-    return [_serialize_cell(getattr(rec, col)) for col in EVAL_CSV_COLUMNS]
+def _record_row(rec: EvaluationRecord) -> List:
+    return record_row(rec, EVAL_CSV_COLUMNS, serialize_cell)
 
 
 def record_to_jsonl_dict(rec: EvaluationRecord) -> dict:
@@ -95,31 +97,16 @@ def record_to_jsonl_dict(rec: EvaluationRecord) -> dict:
 
 
 def append_jsonl(path: Path, rec: EvaluationRecord) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(record_to_jsonl_dict(rec), ensure_ascii=False) + "\n")
+    _append_jsonl(path, record_to_jsonl_dict(rec))
 
 
 def init_csv(path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="", encoding="utf-8") as fh:
-        csv.writer(fh).writerow(EVAL_CSV_COLUMNS)
+    _init_csv(path, EVAL_CSV_COLUMNS)
 
 
 def append_csv_row(path: Path, rec: EvaluationRecord) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    write_header = not path.exists() or path.stat().st_size == 0
-    with path.open("a", newline="", encoding="utf-8") as fh:
-        writer = csv.writer(fh)
-        if write_header:
-            writer.writerow(EVAL_CSV_COLUMNS)
-        writer.writerow(_record_row(rec))
+    _append_csv_row(path, EVAL_CSV_COLUMNS, _record_row(rec))
 
 
 def write_csv(path: Path, records: Sequence[EvaluationRecord]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="", encoding="utf-8") as fh:
-        writer = csv.writer(fh)
-        writer.writerow(EVAL_CSV_COLUMNS)
-        for rec in records:
-            writer.writerow(_record_row(rec))
+    _write_csv(path, EVAL_CSV_COLUMNS, [_record_row(rec) for rec in records])

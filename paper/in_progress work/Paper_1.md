@@ -68,7 +68,7 @@ An initial design included German Credit (Statlog / OpenXAI) for cross-dataset c
 
 **Narrative generation** uses `meta-llama/Meta-Llama-3-70B-Instruct` (Meta AI, 2024), accessed via `huggingface_hub.InferenceClient` through Hugging Face Inference Providers. At 70B parameters, this model is not available on the HF serverless tier for all users; requests may be routed to third-party inference providers (e.g., Novita). Temperature is set to 0.0 to maximise output determinism; LLM providers do not guarantee bit-identical outputs at temperature 0 across calls, so a small residual variance in generation cannot be ruled out. The direct strategy uses `max_tokens = 2048` to match the generation budget in Martens et al. (2024); chain-of-thought uses `max_tokens = 1024` for the narrative portion produced after the reasoning steps.
 
-**Extraction** uses `mistralai/Mistral-7B-Instruct-v0.3` (Jiang et al., 2023), deployed as a dedicated Hugging Face Inference Endpoint, with temperature 0.0 and `max_tokens = 1024` to accommodate structured JSON output. Using a model distinct from the generation model avoids circular evaluation: the same model that produced the narrative does not assess its own claims. Mistral 7B is substantially smaller than Llama 3 70B; the capacity asymmetry is a deployment-cost choice and its implications are discussed in §6.2.
+**Extraction** uses `mistralai/Mistral-7B-Instruct-v0.3` (Jiang et al., 2023), deployed as a dedicated Hugging Face Inference Endpoint, with temperature 0.0 and `max_tokens = 1024` to accommodate structured JSON output. Using a model distinct from the generation model avoids circular evaluation: the same model that produced the narrative does not assess its own claims. Mistral 7B is substantially smaller than Llama 3 70B; the capacity asymmetry is a deployment-cost choice and its implications are discussed in §6.1.
 
 | Model                    | Role       | Provider               | Parameters | Temperature |
 | ------------------------ | ---------- | ---------------------- | ---------- | ----------- |
@@ -108,7 +108,7 @@ The four failure types map onto a structural distinction. Sign inversion and ran
 
 For each narrative, the extraction model (Mistral 7B Instruct v0.3) receives the narrative text, the full feature list for the dataset, and the prediction task description. It returns a JSON object in which each feature mentioned in the narrative is recorded with an importance rank (0 = most important), a direction (`sign`: 1 or −1), the feature value if explicitly stated, and a one-sentence causal assumption. A separate field, `unknown_features`, lists any feature-like names that do not match the valid feature set. A rule-based, deterministic comparison step checks each extracted field against ground-truth SHAP values and sets four binary flags. A narrative is marked `any_hallucination = 1` if at least one flag is set. The full JSON schema and the comparison-rule pseudocode are reproduced in Appendix C. Parse failures and ambiguous extractions are logged for manual review.
 
-The omission rule is parameterised by *k* (default *k* = 3), set in `config/default.yaml`. Rank swap uses a set-based criterion rather than a strict ordering. The flag is raised when the set of *k* features assigned the lowest rank values by the extraction model differs from the set of *k* features with the largest |SHAP| values. Internal ordering within that set is ignored. This design distinguishes set-membership errors, in which the model emphasises the wrong features altogether, from ordering noise, in which the narrative discusses the correct top features in a different sequence than SHAP magnitude order. Human-in-the-loop validation against a gold-standard label set is planned as immediate future work; see §6.2.
+The omission rule is parameterised by *k* (default *k* = 3), set in `config/default.yaml`. Rank swap uses a set-based criterion rather than a strict ordering. The flag is raised when the set of *k* features assigned the lowest rank values by the extraction model differs from the set of *k* features with the largest |SHAP| values. Internal ordering within that set is ignored. This design distinguishes set-membership errors, in which the model emphasises the wrong features altogether, from ordering noise, in which the narrative discusses the correct top features in a different sequence than SHAP magnitude order. Human-in-the-loop validation against a gold-standard label set is planned as immediate future work; see §6.1.
 
 ### 4.3 Extraction robustness check
 
@@ -148,7 +148,7 @@ Three quarters of valid narratives exhibit at least one hallucination type: 75.0
 
 ### 5.3 Prompt strategy effects
 
-Because each Adult Income instance is processed under both strategies from the same SHAP table, the two columns of Table 5.1 are paired observations rather than independent samples. Strategy effects are therefore tested with McNemar's exact test on the 122 instances for which extraction succeeded under both strategies. Chain-of-thought reduces overall hallucination substantially: 40 instances are hallucinated under direct but not under chain-of-thought, while only 3 are hallucinated under chain-of-thought but not under direct (exact two-sided *p* < .001; McNemar χ²(1) = 30.14). The reduction is driven almost entirely by sign inversion: 67 instances flip from hallucinated to faithful under chain-of-thought and none flip in the other direction (exact *p* < .001; χ²(1) = 65.01). Rank swap also falls — 33 instances improve under chain-of-thought versus 10 that worsen (exact *p* < .001; χ²(1) = 11.26) — but it remains the dominant failure mode under both strategies, with an absolute reduction of 23.1 percentage points (80.8% → 57.7%). Two hallucination types show no significant difference between strategies: feature fabrication is zero under both, and omission rates are nearly identical at 15.4% versus 19.0% (15 instances worsen under chain-of-thought, 21 improve; exact *p* = .405; χ²(1) = 0.69). The omission result is consistent with the discussion in §6.1: chain-of-thought's explicit ranking step does not translate into complete coverage of top-SHAP features in the final narrative.
+Because each Adult Income instance is processed under both strategies from the same SHAP table, the two columns of Table 5.1 are paired observations rather than independent samples. Strategy effects are therefore tested with McNemar's exact test on the 122 instances for which extraction succeeded under both strategies. Chain-of-thought reduces overall hallucination substantially: 40 instances are hallucinated under direct but not under chain-of-thought, while only 3 are hallucinated under chain-of-thought but not under direct (exact two-sided *p* < .001; McNemar χ²(1) = 30.14). The reduction is driven almost entirely by sign inversion: 67 instances flip from hallucinated to faithful under chain-of-thought and none flip in the other direction (exact *p* < .001; χ²(1) = 65.01). Rank swap also falls — 33 instances improve under chain-of-thought versus 10 that worsen (exact *p* < .001; χ²(1) = 11.26) — but it remains the dominant failure mode under both strategies, with an absolute reduction of 23.1 percentage points (80.8% → 57.7%). Two hallucination types show no significant difference between strategies: feature fabrication is zero under both, and omission rates are nearly identical at 15.4% versus 19.0% (15 instances worsen under chain-of-thought, 21 improve; exact *p* = .405; χ²(1) = 0.69).
 
 **Table 5.2.** McNemar exact tests comparing paired hallucination outcomes between prompt strategies (paired *n* = 122 instances with valid extractions under both strategies). `b` = direct flagged, chain-of-thought not; `c` = chain-of-thought flagged, direct not. Risk difference is direct − chain-of-thought on the unpaired Table 5.1 rates.
 
@@ -160,9 +160,15 @@ Because each Adult Income instance is processed under both strategies from the s
 | Omission            | 15 | 21 |  0.69 |   .405              |  +3.6                |
 | Any hallucination   | 40 |  3 | 30.14 | < .001              | −34.6                |
 
+Sign inversion is a local, within-feature error: the model discusses the right feature but assigns it the wrong direction. Chain-of-thought's explicit verification step — requiring the model to state the top feature and verify its sign as a reasoning step before writing the narrative — drops this error from 60.0% to 4.2%. The intervention targets a specific, verifiable piece of information at generation time, and it works.
+
+Rank swap is a different kind of failure. It concerns which features the model treats as the most influential drivers of the prediction, not how it characterises any individual feature. Chain-of-thought reduces rank swap from 80.8% to 57.7%, but 57.7% remains a majority of narratives. The persistence is examined further alongside the feature-mention evidence in §5.5.
+
+Omission is strategy-invariant. Chain-of-thought's ranking step identifies the top-five features by |SHAP| but does not guarantee that all of them appear in the final narrative. The slight directional increase under chain-of-thought is consistent with token-length pressure as a contributing factor; chain-of-thought has a smaller `max_tokens` budget, discussed in §6.1.
+
 ### 5.4 Co-occurrence of hallucination types
 
-Rank swap rarely occurs alone. It co-occurs with sign inversion in 22.4% of all valid narratives and with omission in a further 13.6%. Sign inversion without rank swap accounts for only 5.5%. The 204 hallucinated narratives in Table 5.3 reconcile to the n_any_hallucination total from the evaluation metadata (81 + 61 + 37 + 15 + 8 + 2 = 204), with the remaining 68 of 272 valid narratives free of any flagged failure. The mechanistic interpretation of this co-occurrence pattern is taken up in §6.1.
+Rank swap rarely occurs alone. It co-occurs with sign inversion in 22.4% of all valid narratives and with omission in a further 13.6%. Sign inversion without rank swap accounts for only 5.5%. The 204 hallucinated narratives in Table 5.3 reconcile to the n_any_hallucination total from the evaluation metadata (81 + 61 + 37 + 15 + 8 + 2 = 204), with the remaining 68 of 272 valid narratives free of any flagged failure. The pattern is consistent with a shared generative mechanism: when the model assigns SHAP attributions to the wrong features, it tends to invert direction for those features and to displace the true top-*k* drivers from the set it presents as most important. The mechanism is not directly tested here and remains a hypothesis to be verified against a human-coded subsample.
 
 **Table 5.3.** Co-occurrence of hallucination types (*n* = 272 valid narratives).
 
@@ -178,7 +184,11 @@ Rank swap rarely occurs alone. It co-occurs with sign inversion in 22.4% of all 
 
 ### 5.5 Feature-level mention patterns
 
-`hours_per_week` (242 mentions, 89.0% of narratives) and `age` (227, 83.5%) appear in almost every narrative regardless of strategy. Capital-related features are substantially underrepresented: `capital_gain` appears in only 19.5% of narratives and `capital_loss` in 22.1%, despite their often-large SHAP magnitudes (mean |SHAP| per feature is reported in Appendix B). Narratives that skip capital features in favour of features with clear demographic interpretations (sex, race, marital status) necessarily misidentify the top-*k* drivers — a direct contribution to rank swap and omission rates. No narrative references a feature name outside the valid feature list, confirming the zero fabrication rate.
+`hours_per_week` (242 mentions, 89.0% of narratives) and `age` (227, 83.5%) appear in almost every narrative regardless of strategy. Capital-related features are substantially underrepresented: `capital_gain` appears in only 19.5% of narratives and `capital_loss` in 22.1%, despite their often-large SHAP magnitudes (mean |SHAP| per feature is reported in Appendix B). Narratives that skip capital features in favour of features with clear demographic interpretations (sex, race, marital status) necessarily misidentify the top-*k* drivers — a direct contribution to rank swap and omission rates.
+
+The model appears to weight features by their interpretive salience — age and hours worked are easy to incorporate into a plausible income narrative — rather than by their SHAP magnitude. This is a hypothesis advanced by this paper rather than a directly tested finding; isolating interpretive salience as a cause would require systematically varying which features carry large SHAP values while holding their narrative plausibility constant, and we leave this to follow-up work. Chain-of-thought's ranking step partially corrects the bias by forcing the model to acknowledge which features rank highest by SHAP before writing, but the final narrative still underrepresents capital features.
+
+No narrative references a feature name outside the valid feature list, confirming the zero fabrication rate. The feature list in the prompt appears to function as a vocabulary constraint; no synonyms or paraphrases of feature names were detected in the `unknown_features` field. The model's failures are in attribution — assigning effects to the wrong features or in the wrong direction — not in invention.
 
 ### 5.6 Extraction robustness
 
@@ -195,31 +205,9 @@ Chain-of-thought narratives are extracted more consistently than direct narrativ
 
 ---
 
-## 6. Discussion and Conclusion
+## 6. Limitations and Conclusion
 
-### 6.1 Interpretation
-
-The results separate qualitatively different failure modes; we discuss each in turn.
-
-#### Sign inversion
-
-Sign inversion is a local, within-feature error: the model discusses the right feature but assigns it the wrong direction. Chain-of-thought's explicit verification step — requiring the model to state the top feature and verify its sign as a reasoning step before writing the narrative — reduces this error from 60.0% to 4.2%. The intervention targets a specific, verifiable piece of information at generation time, and it works.
-
-#### Rank swap
-
-Rank swap is a different kind of failure and is not resolved by chain-of-thought prompting. It concerns which features the model treats as the most influential drivers of the prediction, not how it characterises any individual feature. Chain-of-thought reduces rank swap from 80.8% to 57.7%, but 57.7% remains a majority of narratives. The feature-mention data offers a partial explanation: `capital_gain` and `capital_loss` appear in fewer than a quarter of narratives despite their often-large SHAP magnitudes, while `hours_per_week` and `age` appear in almost every narrative regardless of strategy. The model appears to weight features by their interpretive salience — age and hours worked are easy to incorporate into a plausible income narrative — rather than by their SHAP magnitude. This is a hypothesis advanced by this paper rather than a directly tested finding; isolating interpretive salience as a cause would require systematically varying which features carry large SHAP values while holding their narrative plausibility constant, and we leave this to follow-up work. Chain-of-thought's ranking step partially corrects the bias by forcing the model to acknowledge which features rank highest by SHAP before writing, but the final narrative still underrepresents capital features.
-
-The co-occurrence pattern in §5.4 is consistent with the same mechanism. Rank swap co-occurs with sign inversion in 22.4% of narratives and with omission in 13.6%; sign inversion without rank swap is only 5.5%. The pattern is consistent with a shared generative mechanism: when the model assigns SHAP attributions to the wrong features, it simultaneously inverts direction for those features and displaces the true top-*k* drivers from the set it presents as most important. The mechanism is not directly tested here and remains a hypothesis to be verified against a human-coded subsample.
-
-#### Feature fabrication
-
-Feature fabrication is absent throughout: Llama 3 70B never introduces a feature name outside the valid set, even in the direct condition where it receives no structured reasoning scaffold. The feature list in the prompt appears to function as a constraint on vocabulary; no synonyms or paraphrases of feature names were detected in the `unknown_features` field. The model's failures are in attribution — assigning effects to the wrong features or in the wrong direction — not in invention.
-
-#### Omission
-
-Omission is strategy-invariant: 15.4% versus 19.0%, with no significant paired difference (McNemar exact *p* = .405). Chain-of-thought's explicit ranking step identifies the top-five features by |SHAP| but does not guarantee that all of them appear in the final narrative. The slight directional increase under chain-of-thought (and its smaller `max_tokens` budget; see §6.2) is consistent with token-length pressure as a contributing factor. Whether omission reflects a systematic bias against specific feature types — capital gains and losses are mentioned least, as §5.5 shows — or is a random generation artefact is a question for future work.
-
-### 6.2 Limitations
+### 6.1 Limitations
 
 **Gold-standard validation.** No human-coded subsample exists for the four hallucination classes. The robustness check (§4.3) measures internal consistency of the extraction model across repeated high-temperature runs, not its agreement with human judgement. Of the 204 narratives flagged as hallucinated, the fraction that a domain-expert annotator would also flag has not been measured. We treat the prevalence rates reported here as automated-pipeline estimates calibrated only by internal robustness, and we identify gold-standard validation — a dual-annotated 30–50 narrative subsample with Cohen's κ, against which the pipeline's precision and recall can be computed — as the immediate next step.
 
@@ -233,13 +221,11 @@ Omission is strategy-invariant: 15.4% versus 19.0%, with no significant paired d
 
 **Generation length.** Direct narratives allow up to 2,048 tokens; chain-of-thought narratives are capped at 1,024. The slight directional increase in omission rates under chain-of-thought (15.4% vs. 19.0%) is not significant, but a token budget that halves the available length cannot be ruled out as a contributing factor. Future work comparing strategies at matched token budgets would resolve this.
 
-### 6.3 Conclusion
+### 6.2 Conclusion
 
-LLMs do not reliably report what SHAP values show. Across 272 valid evaluations of Llama 3 70B narratives on the Adult Income benchmark, 75.0% contain at least one faithfulness failure. Rank swap, emphasising the wrong features as the most important drivers, affects 68.8% of narratives overall and 57.7% even under chain-of-thought prompting. Feature fabrication is absent under both strategies. Chain-of-thought nearly eliminates directional errors (sign inversion at 4.2%), but the problem of feature selection fidelity is not resolved by prompting alone.
+LLMs do not reliably report what SHAP values show. Across 272 valid evaluations on the Adult Income benchmark, 75.0% of Llama 3 70B narratives contain at least one faithfulness failure, and rank swap persists in 57.7% even under chain-of-thought prompting. Chain-of-thought nearly eliminates directional errors but does not resolve feature-selection fidelity; fabrication is absent throughout.
 
-Faithfulness cannot be assumed. Users of LLM-generated SHAP narratives, in credit decisions, clinical support, or audit contexts, may be reading explanations that emphasise different features than the model actually weighted most highly. Automated verification of the kind described here is tractable and should accompany any deployment that uses LLMs to narrate feature attributions. The detection framework is released as an open-source resource [CITATION NEEDED: anonymised repository link for review; public URL for camera-ready].
-
-To our knowledge, this paper provides the first systematic study of hallucination rates at scale across a full SHAP-narrative evaluation set, varying prompt strategy as an experimental variable and applying automated detection. Papers 2 and 3 of this thesis address the human consequences of each hallucination type and the conditions under which users detect or accept faithfulness failures.
+Automated verification of the kind described here is tractable and should accompany any deployment that narrates feature attributions through an LLM. The detection framework is released as an open-source resource [CITATION NEEDED: anonymised repository link for review; public URL for camera-ready]. Papers 2 and 3 of this thesis address the human consequences of each hallucination type and the conditions under which users detect or accept faithfulness failures.
 
 ---
 

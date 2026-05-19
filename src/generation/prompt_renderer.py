@@ -13,9 +13,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import pandas as pd
-from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
 from src.config import AppConfig, DatasetConfig, PromptStrategyConfig
+from src.prompts.jinja_env import make_jinja_env
 from src.data_loader import format_instance_snapshot, format_shap_table
 
 
@@ -42,11 +42,7 @@ class PromptRenderer:
             search_dirs.add(str(template_path.parent))
             self._template_names[strategy.id] = template_path.name
 
-        self._env = Environment(
-            loader=FileSystemLoader(sorted(search_dirs)),
-            undefined=StrictUndefined,
-            keep_trailing_newline=True,
-        )
+        self._env = make_jinja_env(sorted(search_dirs))
 
     def get_strategy(self, strategy_id: str) -> PromptStrategyConfig:
         return self._cfg.prompt.get_strategy(strategy_id)

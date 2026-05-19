@@ -114,14 +114,19 @@ xAI-research/
 │   │   ├── robustness.py
 │   │   └── robustness_runner.py
 │   ├── pipeline.py                   # Orchestrates generation → evaluation → robustness
+│   ├── prompts/
+│   │   └── jinja_env.py              # Shared Jinja2 Environment factory
 │   ├── storage/
 │   │   ├── narratives_store.py
-│   │   └── evaluations_store.py
+│   │   ├── evaluations_store.py
+│   │   └── record_io.py              # Generic CSV/JSONL writers
 │   └── visualisation/
 │       ├── dataset_overview.py
 │       ├── shap_distributions.py
 │       ├── hallucination_rates.py
+│       ├── hallucination_analysis.py # Per-feature breakdown tables from eval notes
 │       ├── heatmaps.py
+│       ├── robustness_plots.py       # Reliability and low-reliability figures
 │       └── export.py
 ├── notebooks/
 │   ├── 00_data_preparation.ipynb
@@ -135,7 +140,8 @@ xAI-research/
 │   ├── run_generation.py
 │   ├── run_evaluation.py
 │   ├── run_robustness.py
-│   └── export_results.py
+│   ├── export_results.py
+│   └── summarise_results.py          # Paper stats from an evaluation run directory
 ├── tests/
 │   ├── test_llm_client.py
 │   ├── test_evaluator.py
@@ -143,7 +149,8 @@ xAI-research/
 │   ├── test_data_loader.py
 │   ├── test_generator.py
 │   ├── test_pipeline.py
-│   └── test_narrative_text.py
+│   ├── test_narrative_text.py
+│   └── test_visualisation.py
 ├── .env.example
 └── requirements.txt
 ```
@@ -428,7 +435,17 @@ python scripts/export_results.py --run-id <run_id> --eval-figures
 
 - `notebooks/02_narrative_inspection.ipynb` — browse narratives from `narratives.csv`
 - `notebooks/01_data_exploration.ipynb` — feature distributions and SHAP plots
-- `notebooks/03_results_visualisation.ipynb` — placeholder for future evaluation figures
+- `notebooks/03_results_visualisation.ipynb` — evaluation figures, robustness plots, and hallucination breakdown tables
+
+### Utilities — paper statistics
+
+After evaluation (and optionally robustness), summarise rates and sample sizes for the thesis:
+
+```bash
+python scripts/summarise_results.py outputs/evaluations/<run_id>
+```
+
+Writes summary tables to stdout (used by `paper/in_progress work/Results.md`).
 
 ---
 
@@ -488,7 +505,9 @@ evaluation:
     temperature: 0.9
     min_successful_runs: 3
     reliability_threshold: 0.8
-    subsample_fraction: 1.0
+    subsample_fraction: 0.25    # calibration subsample (see also Pydantic defaults below)
+    balanced_subsample: true   # equal Martens / chain_of_thought when subsampling
+    require_successful_eval: true  # only narratives with a successful extraction
     max_workers: 5
 
 visualisation:
@@ -506,6 +525,8 @@ visualisation:
 | `prompt.strategies[].max_tokens` | Per-strategy override (CoT → 1024; Martens uses model 2048) |
 | `evaluation.top_k_features` | Omission check: top-k by \|SHAP\| must appear in extraction |
 | `evaluation.robustness.*` | Multi-sample extraction reliability (`run_robustness.py`) |
+
+**Config layers:** `config/default.yaml` is the source of truth for runs. If a key is omitted from YAML, Pydantic defaults in `src/config.py` apply (e.g. `subsample_fraction: 0.1`, `balanced_subsample: true`). CLI flags such as `--subsample` on `run_pipeline.py` / `run_robustness.py` override YAML for that invocation only.
 
 ---
 
@@ -745,10 +766,22 @@ from src.visualisation.heatmaps import (
 )
 ```
 
+#### `hallucination_analysis.py` — per-feature breakdown tables
+
+Parses evaluation `notes` and exports CSV tables (sign inversion, rank swap, omission, fabrication counts by feature) under `outputs/figures/<run_id>/analysis/`.
+
+#### `robustness_plots.py` — extraction reliability figures
+
+Reliability score distributions, rates by prompt strategy, and hallucination rates split by high/low reliability groups (requires robustness block in evaluations).
+
 #### `export.py` — save figures to disk
 
 ```python
-from src.visualisation.export import export_dataset_figures, export_all_figures
+from src.visualisation.export import (
+    export_dataset_figures,
+    export_all_figures,
+    export_evaluation_figures_complete,
+)
 
 # Dataset-level figures (no evaluation results needed)
 saved = export_dataset_figures(
@@ -756,10 +789,14 @@ saved = export_dataset_figures(
 )
 # Saves to outputs/figures/datasets/adult/
 
-# Evaluation figures for a completed run
+# Full evaluation export (CLI --eval-figures): rates, heatmaps, robustness, analysis tables
+saved = export_evaluation_figures_complete(evals_df, cfg, run_id)
+
+# Lower-level: hallucination rate bar charts only
 saved = export_all_figures(evals_df, cfg, run_id)
-# Saves to outputs/figures/<run_id>/
 ```
+
+`scripts/export_results.py --eval-figures` calls `export_evaluation_figures_complete`.
 
 ---
 
@@ -804,8 +841,8 @@ pytest tests/ -v
 ```
 
 `test_llm_client.py` mocks the Hugging Face client to verify parameter passing and
-response parsing without real API calls. Six test modules cover generation, evaluation,
-robustness, data loading, and narrative text stripping.
+response parsing without real API calls. Eight test modules cover generation, evaluation,
+robustness, data loading, pipeline orchestration, narrative text stripping, and visualisation.
 
 ---
 
@@ -837,7 +874,7 @@ all retries) are caught and logged without aborting the run. No silent data loss
 | 2b    | Output formats — canonical `narratives.csv`, JSONL stream, `run_metadata.yaml`              | Complete                |
 | 3     | Evaluation — LLM extraction + four-type SHAP comparison                                       | Complete                |
 | 3b    | Robustness — multi-sample extraction agreement (optional calibration subsample)            | Complete                |
-| 4     | Visualisation — dataset overview, SHAP distributions; hallucination charts after evaluation | Available after eval   |
+| 4     | Visualisation — dataset overview, SHAP distributions, hallucination charts, robustness plots, analysis tables | Available after eval   |
 | 5     | Export + tests                                                                              | Complete                |
 
 
