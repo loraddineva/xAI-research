@@ -90,6 +90,7 @@ xAI-research/
 ├── outputs/
 │   ├── generation/<run_id>/          # narratives.csv, narratives.jsonl, run_metadata.yaml (gitignored)
 │   ├── evaluations/<run_id>/         # evaluations.csv, robustness.jsonl, eval_metadata.yaml
+│   ├── human_labels/<run_id>/        # labels.jsonl, agreement_report.csv (human validation)
 │   ├── figures/                      # datasets/ and <run_id>/ subfolders (gitignored)
 │   └── xai_metrics/                  # OpenXAI PGI/PGU metrics (optional download script)
 ├── paper/
@@ -105,9 +106,12 @@ xAI-research/
 │   │   ├── narrative_text.py
 │   │   ├── generator.py
 │   │   └── exporters.py
+│   ├── human_labels/
+│   │   └── schema.py                 # Human label validation and conversion
 │   ├── evaluation/
 │   │   ├── evaluator.py
 │   │   ├── compare_to_shap.py        # Four-type hallucination flags
+│   │   ├── compare_extractions.py    # Human vs Mistral agreement metrics
 │   │   ├── extraction_parser.py
 │   │   ├── extraction_prompt_renderer.py
 │   │   ├── exporters.py
@@ -141,7 +145,9 @@ xAI-research/
 │   ├── run_evaluation.py
 │   ├── run_robustness.py
 │   ├── export_results.py
-│   └── summarise_results.py          # Paper stats from an evaluation run directory
+│   ├── summarise_results.py          # Paper stats from an evaluation run directory
+│   ├── human_extraction_ui.py        # Gradio UI for human extraction labels
+│   └── compare_human_to_mistral.py   # Compare human labels vs cached Mistral extractions
 ├── tests/
 │   ├── test_llm_client.py
 │   ├── test_evaluator.py
@@ -150,6 +156,8 @@ xAI-research/
 │   ├── test_generator.py
 │   ├── test_pipeline.py
 │   ├── test_narrative_text.py
+│   ├── test_human_label_schema.py
+│   ├── test_compare_extractions.py
 │   └── test_visualisation.py
 ├── .env.example
 └── requirements.txt
@@ -446,6 +454,23 @@ python scripts/summarise_results.py outputs/evaluations/<run_id>
 ```
 
 Writes summary tables to stdout (used by `paper/in_progress work/Results.md`).
+
+### Human extraction validation
+
+Label narratives by hand (sign, rank, and unknown features only) and compare against cached Mistral extractions:
+
+```bash
+# Launch Gradio labeling UI (reads narratives.csv; SHAP hidden)
+python scripts/human_extraction_ui.py --run-id <run_id> --annotator your_name
+
+# After labeling, compare human vs Mistral (uses evaluations.csv; no API calls)
+python scripts/compare_human_to_mistral.py \
+  --run-id <run_id> \
+  --eval-dir outputs/evaluations/<run_id> \
+  --top-k 3
+```
+
+Labels are stored in `outputs/human_labels/<run_id>/labels.jsonl`. The comparison script writes `agreement_report.csv` in the same folder with per-narrative sign/rank/top-k agreement metrics.
 
 ---
 

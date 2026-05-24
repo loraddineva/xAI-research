@@ -30,11 +30,19 @@ from src.visualisation.hallucination_rates import (
     plot_type_by_strategy,
     strategy_label,
 )
+from src.visualisation.paper_figures import (
+    build_rate_forest_rows,
+    flip_contingency,
+    paired_evaluations,
+    plot_paired_flip_panels,
+    plot_rate_forest,
+)
 from src.visualisation.robustness_plots import (
     attach_robustness_columns,
     filter_reliable_extractions,
     load_robustness_df,
 )
+from src.visualisation.stats import mcnemar_chi2, mcnemar_stat_line, wilson_proportion_ci
 
 
 def _robustness_json(score: float, flagged: bool = False, unreliable: bool = False) -> str:
@@ -207,6 +215,67 @@ class TestHallucinationAnalysis:
     def test_parse_notes_empty(self):
         assert parse_notes("{}") == {}
         assert parse_notes(None) == {}
+
+
+class TestPaperFigures:
+    def _paired_evals_df(self) -> pd.DataFrame:
+        rows = []
+        for i in range(6):
+            instance = i // 2
+            strat = "martens" if i % 2 == 0 else "chain_of_thought"
+            rows.append({
+                "instance_id": instance,
+                "narrative_id": f"n{i}",
+                "prompt_strategy": strat,
+                "parse_error": "",
+                "sign_inversion": 1 if strat == "martens" and instance < 3 else 0,
+                "rank_swap": 1 if instance % 2 == 0 else 0,
+                "feature_fabrication": 0,
+                "omission": 1 if instance == 1 else 0,
+                "any_hallucination": 1,
+            })
+        return pd.DataFrame(rows)
+
+    def test_flip_contingency_sign_inversion(self):
+        paired = paired_evaluations(self._paired_evals_df())
+        counts = flip_contingency(paired, "sign_inversion")
+        assert counts["direct_only"] == 3
+        assert counts["cot_only"] == 0
+
+    def test_paired_flip_figure(self):
+        fig = plot_paired_flip_panels(self._paired_evals_df())
+        assert fig.axes
+        import matplotlib.pyplot as plt
+        plt.close(fig)
+
+    def test_forest_rows_and_figure(self):
+        evals = self._paired_evals_df()
+        rows = build_rate_forest_rows(evals, recomputed_df=None, k_values=[3])
+        assert not rows.empty
+        assert "rate" in rows.columns
+        fig = plot_rate_forest(rows)
+        import matplotlib.pyplot as plt
+        plt.close(fig)
+
+
+class TestWilsonCi:
+    def test_bounds(self):
+        p, lo, hi = wilson_proportion_ci(75, 100)
+        assert lo <= p <= hi
+        assert 0.7 < p < 0.8
+
+
+class TestMcNemarStats:
+    def test_sign_inversion_matches_paper(self):
+        assert abs(mcnemar_chi2(67, 0) - 65.01) < 0.02
+
+    def test_omission_matches_paper(self):
+        assert abs(mcnemar_chi2(15, 21) - 0.69) < 0.02
+
+    def test_stat_line_format(self):
+        line = mcnemar_stat_line("Sign inversion", 67, 0)
+        assert "65.01" in line
+        assert "p < .001" in line
 
 
 class TestExportMinNGuard:
